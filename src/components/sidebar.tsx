@@ -45,7 +45,7 @@ const navigation = [
   },
   {
     name: "Ano Safra",
-    href: "/cadastros/safra",
+    href: "/cadastros/ano-safra",
     icon: Calendar,
   },
   {

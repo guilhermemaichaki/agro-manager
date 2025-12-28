@@ -48,11 +48,12 @@ import type {
   ApplicationProduct,
   Product,
   Field,
-  CropYear,
+  HarvestYear,
   ApplicationStatus,
   FieldCrop,
   SubField,
   Culture,
+  HarvestCycle,
 } from "@/types/schema";
 import { supabase } from "@/lib/supabase";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -67,7 +68,7 @@ const applicationProductSchema = z.object({
 
 // Schema de validação para aplicação
 const applicationSchema = z.object({
-  crop_year_id: z.string().min(1, "Safra é obrigatória"),
+  harvest_year_id: z.string().min(1, "Ano Safra é obrigatório"),
   field_id: z.string().min(1, "Talhão é obrigatório"),
   field_crop_id: z.string().optional(), // Cultura/Ciclo planejado
   is_partial: z.boolean().optional(), // Aplicação parcial
@@ -82,7 +83,7 @@ type ApplicationFormValues = z.infer<typeof applicationSchema>;
 
 // Tipos para API
 interface CreateApplicationInput {
-  crop_year_id: string;
+  harvest_year_id: string;
   field_id: string;
   application_date: string;
   status: string;
@@ -108,7 +109,7 @@ async function fetchApplications(): Promise<Application[]> {
     .select(`
       *,
       field:fields(*),
-      crop_year:crop_years(*),
+      harvest_year:harvest_years(*),
       application_products:application_products(
         *,
         product:products(*)
@@ -123,15 +124,15 @@ async function fetchApplications(): Promise<Application[]> {
   return data || [];
 }
 
-// Função para buscar safras
-async function fetchCropYears(): Promise<CropYear[]> {
+// Função para buscar anos safra
+async function fetchHarvestYears(): Promise<HarvestYear[]> {
   const { data, error } = await supabase
-    .from("crop_years")
+    .from("harvest_years")
     .select("*")
     .order("start_date", { ascending: false });
 
   if (error) {
-    throw new Error(`Erro ao buscar safras: ${error.message}`);
+    throw new Error(`Erro ao buscar anos safra: ${error.message}`);
   }
 
   return data || [];
@@ -165,16 +166,29 @@ async function fetchProducts(): Promise<Product[]> {
   return data || [];
 }
 
-// Função para buscar field_crops (culturas planejadas) por talhão e safra
-async function fetchFieldCrops(fieldId: string, cropYearId: string): Promise<FieldCrop[]> {
+// Função para buscar field_crops (culturas planejadas) por talhão e ano safra
+async function fetchFieldCrops(fieldId: string, harvestYearId: string): Promise<FieldCrop[]> {
+  // Primeiro buscar os ciclos do ano safra
+  const { data: cycles, error: cyclesError } = await supabase
+    .from("harvest_cycles")
+    .select("id")
+    .eq("harvest_year_id", harvestYearId);
+
+  if (cyclesError || !cycles || cycles.length === 0) {
+    return [];
+  }
+
+  const cycleIds = cycles.map((c) => c.id);
+
   const { data, error } = await supabase
     .from("field_crops")
     .select(`
       *,
-      culture:cultures(*)
+      culture:cultures(*),
+      harvest_cycle:harvest_cycles(*)
     `)
     .eq("field_id", fieldId)
-    .eq("crop_year_id", cropYearId);
+    .in("harvest_cycle_id", cycleIds);
 
   if (error) {
     throw new Error(`Erro ao buscar culturas planejadas: ${error.message}`);
@@ -210,7 +224,7 @@ async function createApplication(data: CreateApplicationInput): Promise<Applicat
   const { data: newApplication, error: appError } = await supabase
     .from("applications")
     .insert({
-      crop_year_id: data.crop_year_id,
+      harvest_year_id: data.harvest_year_id,
       field_id: data.field_id,
       application_date: data.application_date,
       status: statusValue,
@@ -253,7 +267,7 @@ async function createApplication(data: CreateApplicationInput): Promise<Applicat
     .select(`
       *,
       field:fields(*),
-      crop_year:crop_years(*),
+      harvest_year:harvest_years(*),
       application_products:application_products(
         *,
         product:products(*)
@@ -282,7 +296,7 @@ async function updateApplication(data: UpdateApplicationInput): Promise<Applicat
   }
 
   const updatePayload: Record<string, any> = {};
-  if (updateData.crop_year_id !== undefined) updatePayload.crop_year_id = updateData.crop_year_id;
+  if (updateData.harvest_year_id !== undefined) updatePayload.harvest_year_id = updateData.harvest_year_id;
   if (updateData.field_id !== undefined) updatePayload.field_id = updateData.field_id;
   if (updateData.application_date !== undefined)
     updatePayload.application_date = updateData.application_date;
@@ -328,7 +342,7 @@ async function updateApplication(data: UpdateApplicationInput): Promise<Applicat
     .select(`
       *,
       field:fields(*),
-      crop_year:crop_years(*),
+      harvest_year:harvest_years(*),
       application_products:application_products(
         *,
         product:products(*)
@@ -399,9 +413,9 @@ export default function AplicacoesPage() {
     queryFn: fetchApplications,
   });
 
-  const { data: cropYears = [] } = useQuery({
-    queryKey: ["crop_years"],
-    queryFn: fetchCropYears,
+  const { data: harvestYears = [] } = useQuery({
+    queryKey: ["harvest_years"],
+    queryFn: fetchHarvestYears,
   });
 
   const { data: fields = [] } = useQuery({
@@ -453,7 +467,7 @@ export default function AplicacoesPage() {
   const form = useForm<ApplicationFormValues>({
     resolver: zodResolver(applicationSchema),
     defaultValues: {
-      crop_year_id: "",
+      harvest_year_id: "",
       field_id: "",
       field_crop_id: "",
       is_partial: false,
@@ -465,15 +479,15 @@ export default function AplicacoesPage() {
     },
   });
 
-  // Buscar field_crops quando talhão e safra forem selecionados
+  // Buscar field_crops quando talhão e ano safra forem selecionados
   const selectedFieldId = form.watch("field_id");
-  const selectedCropYearId = form.watch("crop_year_id");
+  const selectedHarvestYearId = form.watch("harvest_year_id");
   const isPartial = form.watch("is_partial");
 
   const { data: fieldCrops = [] } = useQuery({
-    queryKey: ["field_crops", selectedFieldId, selectedCropYearId],
-    queryFn: () => fetchFieldCrops(selectedFieldId, selectedCropYearId),
-    enabled: !!selectedFieldId && !!selectedCropYearId,
+    queryKey: ["field_crops", selectedFieldId, selectedHarvestYearId],
+    queryFn: () => fetchFieldCrops(selectedFieldId, selectedHarvestYearId),
+    enabled: !!selectedFieldId && !!selectedHarvestYearId,
   });
 
   const { data: subFields = [] } = useQuery({
@@ -513,7 +527,7 @@ export default function AplicacoesPage() {
     }));
 
     form.reset({
-      crop_year_id: application.crop_year_id,
+      harvest_year_id: application.harvest_year_id,
       field_id: application.field_id,
       application_date: formatDateForInput(application.application_date),
       status: statusValue as any,
@@ -591,20 +605,20 @@ export default function AplicacoesPage() {
                   <div className="grid grid-cols-2 gap-4">
                     <FormField
                       control={form.control}
-                      name="crop_year_id"
+                      name="harvest_year_id"
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel>Safra</FormLabel>
+                          <FormLabel>Ano Safra</FormLabel>
                           <Select onValueChange={field.onChange} value={field.value}>
                             <FormControl>
                               <SelectTrigger>
-                                <SelectValue placeholder="Selecione a safra" />
+                                <SelectValue placeholder="Selecione o ano safra" />
                               </SelectTrigger>
                             </FormControl>
                             <SelectContent>
-                              {cropYears.map((cropYear) => (
-                                <SelectItem key={cropYear.id} value={cropYear.id}>
-                                  {cropYear.name}
+                              {harvestYears.map((harvestYear) => (
+                                <SelectItem key={harvestYear.id} value={harvestYear.id}>
+                                  {harvestYear.name}
                                 </SelectItem>
                               ))}
                             </SelectContent>
@@ -640,7 +654,7 @@ export default function AplicacoesPage() {
                   </div>
 
                   {/* Cultura/Ciclo Planejado */}
-                  {selectedFieldId && selectedCropYearId && fieldCrops.length > 0 && (
+                  {selectedFieldId && selectedHarvestYearId && fieldCrops.length > 0 && (
                     <FormField
                       control={form.control}
                       name="field_crop_id"
@@ -656,9 +670,10 @@ export default function AplicacoesPage() {
                             <SelectContent>
                               {fieldCrops.map((fieldCrop) => {
                                 const culture = fieldCrop.culture as Culture | undefined;
+                                const harvestCycle = fieldCrop.harvest_cycle as HarvestCycle | undefined;
                                 return (
                                   <SelectItem key={fieldCrop.id} value={fieldCrop.id}>
-                                    {culture?.name || "Cultura"} - {fieldCrop.cycle}
+                                    {culture?.name || "Cultura"} - {harvestCycle?.name || "Ciclo"}
                                   </SelectItem>
                                 );
                               })}
@@ -991,14 +1006,14 @@ export default function AplicacoesPage() {
               <TableBody>
                 {applications.map((application) => {
                   const field = application.field as Field | undefined;
-                  const cropYear = application.crop_year as CropYear | undefined;
+                  const harvestYear = application.harvest_year as HarvestYear | undefined;
                   return (
                     <TableRow key={application.id}>
                       <TableCell>{formatDate(application.application_date)}</TableCell>
                       <TableCell className="font-medium">
                         {field?.name || "Talhão não encontrado"}
                       </TableCell>
-                      <TableCell>{cropYear?.name || "Safra não encontrada"}</TableCell>
+                      <TableCell>{harvestYear?.name || "Ano Safra não encontrado"}</TableCell>
                       <TableCell>
                         <span
                           className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${

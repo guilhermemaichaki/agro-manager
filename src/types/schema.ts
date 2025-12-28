@@ -25,15 +25,24 @@ export enum StockMovementType {
 /**
  * Ano Safra - Período de cultivo
  */
-export interface CropYear {
+export interface HarvestYear {
   id: string;
-  year: number;
-  name: string; // Ex: "Safra 2024/2025"
+  name: string; // Ex: "2024/2025"
   start_date: string; // ISO date string
   end_date: string; // ISO date string
-  is_active: boolean;
   created_at: string;
-  updated_at: string;
+}
+
+/**
+ * Ciclo de Safra - Ciclo dentro de um ano safra (Ex: Verão, Safrinha, Inverno)
+ */
+export interface HarvestCycle {
+  id: string;
+  harvest_year_id: string;
+  name: string; // Ex: "Verão", "Safrinha", "Inverno", "Feijão das Águas"
+  created_at: string;
+  // Relations
+  harvest_year?: HarvestYear;
 }
 
 /**
@@ -94,14 +103,13 @@ export interface SubField {
 export interface FieldCrop {
   id: string;
   field_id: string;
-  crop_year_id: string;
+  harvest_cycle_id: string;
   culture_id: string;
-  cycle: string; // "Verão", "Safrinha", "Inverno", "Único"
   created_at: string;
   updated_at: string;
   // Relations
   field?: Field;
-  crop_year?: CropYear;
+  harvest_cycle?: HarvestCycle;
   culture?: Culture;
 }
 
@@ -174,7 +182,7 @@ export interface CurrentStock {
 export interface Application {
   id: string;
   field_id: string;
-  crop_year_id: string;
+  harvest_year_id: string;
   application_date: string; // ISO date string (data planejada ou realizada)
   status: ApplicationStatus;
   rate: number; // Taxa em L/ha
@@ -187,7 +195,7 @@ export interface Application {
   updated_at: string;
   // Relations
   field?: Field;
-  crop_year?: CropYear;
+  harvest_year?: HarvestYear;
   application_products?: ApplicationProduct[];
 }
 
@@ -282,7 +290,7 @@ export interface CreateStockEntryInput {
 
 export interface CreateApplicationInput {
   field_id: string;
-  crop_year_id: string;
+  harvest_year_id: string;
   application_date: string;
   rate: number;
   nozzle: string;
@@ -298,19 +306,16 @@ export interface ApplicationProductInput {
 }
 
 export interface CreateFieldInput {
-  crop_year_id: string;
   name: string;
   area_hectares: number;
-  culture: string;
   description?: string;
 }
 
-export interface CreateCropYearInput {
-  year: number;
+export interface CreateHarvestYearInput {
   name: string;
   start_date: string;
   end_date: string;
-  is_active?: boolean;
+  cycles: string[]; // Array de nomes de ciclos
 }
 
 // ============================================
@@ -323,10 +328,20 @@ export interface CreateCropYearInput {
 export type Database = {
   public: {
     Tables: {
-      crop_years: {
-        Row: CropYear;
-        Insert: Omit<CropYear, 'id' | 'created_at' | 'updated_at'>;
-        Update: Partial<Omit<CropYear, 'id' | 'created_at'>>;
+      harvest_years: {
+        Row: HarvestYear;
+        Insert: Omit<HarvestYear, 'id' | 'created_at'>;
+        Update: Partial<Omit<HarvestYear, 'id' | 'created_at'>>;
+      };
+      harvest_cycles: {
+        Row: HarvestCycle;
+        Insert: Omit<HarvestCycle, 'id' | 'created_at'>;
+        Update: Partial<Omit<HarvestCycle, 'id' | 'created_at'>>;
+      };
+      field_crops: {
+        Row: FieldCrop;
+        Insert: Omit<FieldCrop, 'id' | 'created_at' | 'updated_at'>;
+        Update: Partial<Omit<FieldCrop, 'id' | 'created_at' | 'updated_at'>>;
       };
       fields: {
         Row: Field;

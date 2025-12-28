@@ -41,13 +41,13 @@ import { Badge } from "@/components/ui/badge";
 import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import type { Field, FieldCrop, Culture, CropYear } from "@/types/schema";
+import type { Field, FieldCrop, Culture, HarvestCycle } from "@/types/schema";
 import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store/app-store";
 
 const fieldCropSchema = z.object({
   culture_id: z.string().min(1, "Cultura é obrigatória"),
-  cycle: z.enum(["Verão", "Safrinha", "Inverno", "Único"]),
+  harvest_cycle_id: z.string().min(1, "Ciclo é obrigatório"),
 });
 
 const planningSchema = z.object({
@@ -59,9 +59,8 @@ type PlanningFormValues = z.infer<typeof planningSchema>;
 
 interface CreateFieldCropInput {
   field_id: string;
-  crop_year_id: string;
+  harvest_cycle_id: string;
   culture_id: string;
-  cycle: string;
 }
 
 async function fetchFields(farmId: string | null): Promise<Field[]> {
@@ -93,32 +92,46 @@ async function fetchCultures(): Promise<Culture[]> {
   return data || [];
 }
 
-async function fetchFieldCrops(fieldId: string, cropYearId: string): Promise<FieldCrop[]> {
+async function fetchHarvestCycles(harvestYearId: string | null): Promise<HarvestCycle[]> {
+  if (!harvestYearId) return [];
+
   const { data, error } = await supabase
-    .from("field_crops")
-    .select(`
-      *,
-      culture:cultures(*)
-    `)
-    .eq("field_id", fieldId)
-    .eq("crop_year_id", cropYearId);
+    .from("harvest_cycles")
+    .select("*")
+    .eq("harvest_year_id", harvestYearId)
+    .order("name", { ascending: true });
 
   if (error) {
-    throw new Error(`Erro ao buscar planejamento: ${error.message}`);
+    throw new Error(`Erro ao buscar ciclos: ${error.message}`);
   }
 
   return data || [];
 }
 
-async function fetchAllFieldCrops(cropYearId: string, farmId: string | null): Promise<FieldCrop[]> {
+async function fetchFieldCrops(harvestYearId: string | null, farmId: string | null): Promise<FieldCrop[]> {
+  if (!harvestYearId) return [];
+
   let query = supabase
     .from("field_crops")
     .select(`
       *,
       field:fields(*),
-      culture:cultures(*)
-    `)
-    .eq("crop_year_id", cropYearId);
+      culture:cultures(*),
+      harvest_cycle:harvest_cycles(*)
+    `);
+
+  // Filtrar por harvest_cycle que pertence ao harvest_year
+  const { data: cycles } = await supabase
+    .from("harvest_cycles")
+    .select("id")
+    .eq("harvest_year_id", harvestYearId);
+
+  if (!cycles || cycles.length === 0) {
+    return [];
+  }
+
+  const cycleIds = cycles.map((c) => c.id);
+  query = query.in("harvest_cycle_id", cycleIds);
 
   if (farmId) {
     query = query.eq("field.farm_id", farmId);
@@ -138,9 +151,8 @@ async function createFieldCrop(data: CreateFieldCropInput): Promise<FieldCrop> {
     .from("field_crops")
     .insert({
       field_id: data.field_id,
-      crop_year_id: data.crop_year_id,
+      harvest_cycle_id: data.harvest_cycle_id,
       culture_id: data.culture_id,
-      cycle: data.cycle,
     } as any)
     .select()
     .single();
@@ -167,7 +179,7 @@ async function deleteFieldCrop(id: string): Promise<void> {
 export default function PlanejamentoPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const queryClient = useQueryClient();
-  const { selectedFarmId, selectedCropYearId } = useAppStore();
+  const { selectedFarmId, selectedHarvestYearId } = useAppStore();
 
   const { data: fields = [] } = useQuery({
     queryKey: ["fields", selectedFarmId],
@@ -180,10 +192,16 @@ export default function PlanejamentoPage() {
     queryFn: fetchCultures,
   });
 
+  const { data: harvestCycles = [] } = useQuery({
+    queryKey: ["harvest_cycles", selectedHarvestYearId],
+    queryFn: () => fetchHarvestCycles(selectedHarvestYearId),
+    enabled: !!selectedHarvestYearId,
+  });
+
   const { data: fieldCrops = [], isLoading } = useQuery({
-    queryKey: ["field_crops", selectedCropYearId, selectedFarmId],
-    queryFn: () => fetchAllFieldCrops(selectedCropYearId!, selectedFarmId),
-    enabled: !!selectedCropYearId,
+    queryKey: ["field_crops", selectedHarvestYearId, selectedFarmId],
+    queryFn: () => fetchFieldCrops(selectedHarvestYearId, selectedFarmId),
+    enabled: !!selectedHarvestYearId,
   });
 
   const createMutation = useMutation({
@@ -222,8 +240,13 @@ export default function PlanejamentoPage() {
   });
 
   const onSubmit = (data: PlanningFormValues) => {
-    if (!selectedCropYearId) {
-      alert("Selecione uma safra no header");
+    if (!selectedHarvestYearId) {
+      alert("Selecione um ano safra no header");
+      return;
+    }
+
+    if (harvestCycles.length === 0) {
+      alert("Não há ciclos cadastrados para este ano safra. Cadastre ciclos primeiro.");
       return;
     }
 
@@ -231,9 +254,8 @@ export default function PlanejamentoPage() {
     data.crops.forEach((crop) => {
       createMutation.mutate({
         field_id: data.field_id,
-        crop_year_id: selectedCropYearId,
+        harvest_cycle_id: crop.harvest_cycle_id,
         culture_id: crop.culture_id,
-        cycle: crop.cycle,
       });
     });
   };
@@ -255,13 +277,13 @@ export default function PlanejamentoPage() {
     return acc;
   }, {} as Record<string, { field?: Field; crops: FieldCrop[] }>);
 
-  if (!selectedCropYearId) {
+  if (!selectedHarvestYearId) {
     return (
       <div className="space-y-6">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Planejamento de Safra</h1>
           <p className="text-muted-foreground">
-            Selecione uma safra no header para visualizar o planejamento
+            Selecione um ano safra no header para visualizar o planejamento
           </p>
         </div>
       </div>
@@ -330,7 +352,14 @@ export default function PlanejamentoPage() {
                       type="button"
                       variant="outline"
                       size="sm"
-                      onClick={() => appendCrop({ culture_id: "", cycle: "Verão" })}
+                      onClick={() => {
+                        if (harvestCycles.length > 0) {
+                          appendCrop({ culture_id: "", harvest_cycle_id: harvestCycles[0].id });
+                        } else {
+                          alert("Não há ciclos cadastrados para este ano safra.");
+                        }
+                      }}
+                      disabled={harvestCycles.length === 0}
                     >
                       <Plus className="mr-2 h-4 w-4" />
                       Adicionar Cultura
@@ -371,21 +400,22 @@ export default function PlanejamentoPage() {
                           />
                           <FormField
                             control={form.control}
-                            name={`crops.${index}.cycle`}
+                            name={`crops.${index}.harvest_cycle_id`}
                             render={({ field }) => (
                               <FormItem className="w-40">
                                 <FormLabel>Ciclo</FormLabel>
                                 <Select onValueChange={field.onChange} value={field.value}>
                                   <FormControl>
                                     <SelectTrigger>
-                                      <SelectValue />
+                                      <SelectValue placeholder="Ciclo" />
                                     </SelectTrigger>
                                   </FormControl>
                                   <SelectContent>
-                                    <SelectItem value="Verão">Verão</SelectItem>
-                                    <SelectItem value="Safrinha">Safrinha</SelectItem>
-                                    <SelectItem value="Inverno">Inverno</SelectItem>
-                                    <SelectItem value="Único">Único</SelectItem>
+                                    {harvestCycles.map((cycle) => (
+                                      <SelectItem key={cycle.id} value={cycle.id}>
+                                        {cycle.name}
+                                      </SelectItem>
+                                    ))}
                                   </SelectContent>
                                 </Select>
                                 <FormMessage />
@@ -446,12 +476,13 @@ export default function PlanejamentoPage() {
                 <div key={field?.id} className="border rounded-lg p-4">
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="font-semibold">{field?.name || "Talhão desconhecido"}</h3>
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 flex-wrap">
                       {crops.map((crop) => {
                         const culture = crop.culture as Culture | undefined;
+                        const harvestCycle = crop.harvest_cycle as HarvestCycle | undefined;
                         return (
                           <Badge key={crop.id} variant="secondary" className="gap-1">
-                            {culture?.name || "Cultura"} ({crop.cycle})
+                            {culture?.name || "Cultura"} ({harvestCycle?.name || "Ciclo"})
                             <Button
                               variant="ghost"
                               size="icon"
@@ -474,4 +505,3 @@ export default function PlanejamentoPage() {
     </div>
   );
 }
-

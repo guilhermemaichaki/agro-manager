@@ -62,7 +62,7 @@ async function getDashboardData(): Promise<DashboardData> {
       .select(`
         *,
         field:fields(*),
-        crop_year:crop_years(*)
+        harvest_year:harvest_years(*)
       `)
       .in("status", ["PLANNED", "planned"])
       .order("application_date", { ascending: true })
@@ -134,7 +134,7 @@ export default function DashboardPage() {
   }
 
   if (error) {
-    return (
+  return (
       <div className="space-y-6">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Visão Geral da Fazenda</h1>
@@ -237,14 +237,14 @@ export default function DashboardPage() {
                 <TableBody>
                   {data.upcomingApplications.map((application) => {
                     const field = application.field as Field | undefined;
-                    const cropYear = application.crop_year as any;
+                    const harvestYear = application.harvest_year as any;
                     return (
                       <TableRow key={application.id}>
                         <TableCell className="font-medium">
                           {formatDate(application.application_date)}
                         </TableCell>
                         <TableCell>{field?.name || "-"}</TableCell>
-                        <TableCell>{cropYear?.name || "-"}</TableCell>
+                        <TableCell>{harvestYear?.name || "-"}</TableCell>
                       </TableRow>
                     );
                   })}
@@ -305,7 +305,7 @@ export default function DashboardPage() {
             )}
           </CardContent>
         </Card>
-      </div>
+        </div>
     </div>
   );
 }
