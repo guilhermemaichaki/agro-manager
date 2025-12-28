@@ -50,8 +50,12 @@ import type {
   Field,
   CropYear,
   ApplicationStatus,
+  FieldCrop,
+  SubField,
+  Culture,
 } from "@/types/schema";
 import { supabase } from "@/lib/supabase";
+import { Checkbox } from "@/components/ui/checkbox";
 
 // Schema de validação para produto da aplicação
 const applicationProductSchema = z.object({
@@ -65,6 +69,9 @@ const applicationProductSchema = z.object({
 const applicationSchema = z.object({
   crop_year_id: z.string().min(1, "Safra é obrigatória"),
   field_id: z.string().min(1, "Talhão é obrigatório"),
+  field_crop_id: z.string().optional(), // Cultura/Ciclo planejado
+  is_partial: z.boolean().optional(), // Aplicação parcial
+  sub_field_ids: z.array(z.string()).optional(), // Sub-talhões selecionados
   application_date: z.string().min(1, "Data é obrigatória"),
   status: z.enum(["planned", "completed", "cancelled", "PLANNED", "DONE", "CANCELED"]),
   notes: z.string().optional(),
@@ -153,6 +160,39 @@ async function fetchProducts(): Promise<Product[]> {
 
   if (error) {
     throw new Error(`Erro ao buscar produtos: ${error.message}`);
+  }
+
+  return data || [];
+}
+
+// Função para buscar field_crops (culturas planejadas) por talhão e safra
+async function fetchFieldCrops(fieldId: string, cropYearId: string): Promise<FieldCrop[]> {
+  const { data, error } = await supabase
+    .from("field_crops")
+    .select(`
+      *,
+      culture:cultures(*)
+    `)
+    .eq("field_id", fieldId)
+    .eq("crop_year_id", cropYearId);
+
+  if (error) {
+    throw new Error(`Erro ao buscar culturas planejadas: ${error.message}`);
+  }
+
+  return data || [];
+}
+
+// Função para buscar sub-talhões
+async function fetchSubFields(fieldId: string): Promise<SubField[]> {
+  const { data, error } = await supabase
+    .from("sub_fields")
+    .select("*")
+    .eq("field_id", fieldId)
+    .order("name", { ascending: true });
+
+  if (error) {
+    throw new Error(`Erro ao buscar sub-talhões: ${error.message}`);
   }
 
   return data || [];
@@ -415,11 +455,31 @@ export default function AplicacoesPage() {
     defaultValues: {
       crop_year_id: "",
       field_id: "",
+      field_crop_id: "",
+      is_partial: false,
+      sub_field_ids: [],
       application_date: "",
       status: "planned",
       notes: "",
       products: [],
     },
+  });
+
+  // Buscar field_crops quando talhão e safra forem selecionados
+  const selectedFieldId = form.watch("field_id");
+  const selectedCropYearId = form.watch("crop_year_id");
+  const isPartial = form.watch("is_partial");
+
+  const { data: fieldCrops = [] } = useQuery({
+    queryKey: ["field_crops", selectedFieldId, selectedCropYearId],
+    queryFn: () => fetchFieldCrops(selectedFieldId, selectedCropYearId),
+    enabled: !!selectedFieldId && !!selectedCropYearId,
+  });
+
+  const { data: subFields = [] } = useQuery({
+    queryKey: ["sub_fields", selectedFieldId],
+    queryFn: () => fetchSubFields(selectedFieldId),
+    enabled: !!selectedFieldId && !!isPartial,
   });
 
   const { fields: productFields, append, remove } = useFieldArray({
@@ -578,6 +638,112 @@ export default function AplicacoesPage() {
                       )}
                     />
                   </div>
+
+                  {/* Cultura/Ciclo Planejado */}
+                  {selectedFieldId && selectedCropYearId && fieldCrops.length > 0 && (
+                    <FormField
+                      control={form.control}
+                      name="field_crop_id"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Cultura/Ciclo</FormLabel>
+                          <Select onValueChange={field.onChange} value={field.value}>
+                            <FormControl>
+                              <SelectTrigger>
+                                <SelectValue placeholder="Selecione a cultura/ciclo planejado" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              {fieldCrops.map((fieldCrop) => {
+                                const culture = fieldCrop.culture as Culture | undefined;
+                                return (
+                                  <SelectItem key={fieldCrop.id} value={fieldCrop.id}>
+                                    {culture?.name || "Cultura"} - {fieldCrop.cycle}
+                                  </SelectItem>
+                                );
+                              })}
+                            </SelectContent>
+                          </Select>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  )}
+
+                  {/* Aplicação Parcial */}
+                  {selectedFieldId && (
+                    <FormField
+                      control={form.control}
+                      name="is_partial"
+                      render={({ field }) => (
+                        <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4">
+                          <FormControl>
+                            <Checkbox
+                              checked={field.value}
+                              onCheckedChange={field.onChange}
+                            />
+                          </FormControl>
+                          <div className="space-y-1 leading-none">
+                            <FormLabel>Aplicação Parcial?</FormLabel>
+                            <p className="text-sm text-muted-foreground">
+                              Marque se a aplicação será apenas em sub-talhões específicos
+                            </p>
+                          </div>
+                        </FormItem>
+                      )}
+                    />
+                  )}
+
+                  {/* Sub-talhões (aparece apenas se aplicação parcial estiver marcada) */}
+                  {isPartial && subFields.length > 0 && (
+                    <FormField
+                      control={form.control}
+                      name="sub_field_ids"
+                      render={() => (
+                        <FormItem>
+                          <div className="mb-4">
+                            <FormLabel className="text-base">Sub-talhões</FormLabel>
+                            <p className="text-sm text-muted-foreground">
+                              Selecione os sub-talhões onde a aplicação será realizada
+                            </p>
+                          </div>
+                          {subFields.map((subField) => (
+                            <FormField
+                              key={subField.id}
+                              control={form.control}
+                              name="sub_field_ids"
+                              render={({ field }) => {
+                                return (
+                                  <FormItem
+                                    key={subField.id}
+                                    className="flex flex-row items-start space-x-3 space-y-0"
+                                  >
+                                    <FormControl>
+                                      <Checkbox
+                                        checked={field.value?.includes(subField.id)}
+                                        onCheckedChange={(checked) => {
+                                          return checked
+                                            ? field.onChange([...(field.value || []), subField.id])
+                                            : field.onChange(
+                                                field.value?.filter((value) => value !== subField.id)
+                                              );
+                                        }}
+                                      />
+                                    </FormControl>
+                                    <FormLabel className="font-normal">
+                                      {subField.name} ({subField.area_hectares.toFixed(1)} ha)
+                                    </FormLabel>
+                                  </FormItem>
+                                );
+                              }}
+                            />
+                          ))}
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  )}
+
                   <div className="grid grid-cols-2 gap-4">
                     <FormField
                       control={form.control}

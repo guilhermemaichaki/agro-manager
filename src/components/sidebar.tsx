@@ -49,6 +49,16 @@ const navigation = [
     icon: Calendar,
   },
   {
+    name: "Fazendas",
+    href: "/cadastros/fazendas",
+    icon: FolderTree,
+  },
+  {
+    name: "Culturas",
+    href: "/cadastros/culturas",
+    icon: FolderTree,
+  },
+  {
     name: "Configurações",
     href: "/configuracoes",
     icon: Settings,

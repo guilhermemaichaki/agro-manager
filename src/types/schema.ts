@@ -37,17 +37,72 @@ export interface CropYear {
 }
 
 /**
+ * Fazenda
+ */
+export interface Farm {
+  id: string;
+  name: string;
+  description?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Cultura
+ */
+export interface Culture {
+  id: string;
+  name: string;
+  description?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
  * Talhão - Área de cultivo
  */
 export interface Field {
   id: string;
-  crop_year_id: string;
+  farm_id: string;
   name: string;
   area_hectares: number; // Área em hectares
-  culture: string; // Cultura (ex: "Soja", "Milho")
   description?: string;
   created_at: string;
   updated_at: string;
+  // Relations
+  farm?: Farm;
+  sub_fields?: SubField[];
+}
+
+/**
+ * Sub-talhão
+ */
+export interface SubField {
+  id: string;
+  field_id: string;
+  name: string;
+  area_hectares: number;
+  created_at: string;
+  updated_at: string;
+  // Relations
+  field?: Field;
+}
+
+/**
+ * Planejamento de Cultura no Talhão (por Safra e Ciclo)
+ */
+export interface FieldCrop {
+  id: string;
+  field_id: string;
+  crop_year_id: string;
+  culture_id: string;
+  cycle: string; // "Verão", "Safrinha", "Inverno", "Único"
+  created_at: string;
+  updated_at: string;
+  // Relations
+  field?: Field;
+  crop_year?: CropYear;
+  culture?: Culture;
 }
 
 /**
