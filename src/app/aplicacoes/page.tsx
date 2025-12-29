@@ -53,7 +53,6 @@ import type {
   FieldCrop,
   SubField,
   Culture,
-  HarvestCycle,
 } from "@/types/schema";
 import { supabase } from "@/lib/supabase";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -168,27 +167,29 @@ async function fetchProducts(): Promise<Product[]> {
 
 // Função para buscar field_crops (culturas planejadas) por talhão e ano safra
 async function fetchFieldCrops(fieldId: string, harvestYearId: string): Promise<FieldCrop[]> {
-  // Primeiro buscar os ciclos do ano safra
-  const { data: cycles, error: cyclesError } = await supabase
-    .from("harvest_cycles")
+  // Primeiro buscar os crops do ano safra
+  const { data: crops, error: cropsError } = await supabase
+    .from("crops")
     .select("id")
     .eq("harvest_year_id", harvestYearId);
 
-  if (cyclesError || !cycles || cycles.length === 0) {
+  if (cropsError || !crops || crops.length === 0) {
     return [];
   }
 
-  const cycleIds = cycles.map((c) => c.id);
+  const cropIds = crops.map((c) => c.id);
 
   const { data, error } = await supabase
     .from("field_crops")
     .select(`
       *,
-      culture:cultures(*),
-      harvest_cycle:harvest_cycles(*)
+      crop:crops(
+        *,
+        culture:cultures(*)
+      )
     `)
     .eq("field_id", fieldId)
-    .in("harvest_cycle_id", cycleIds);
+    .in("crop_id", cropIds);
 
   if (error) {
     throw new Error(`Erro ao buscar culturas planejadas: ${error.message}`);
@@ -669,11 +670,12 @@ export default function AplicacoesPage() {
                             </FormControl>
                             <SelectContent>
                               {fieldCrops.map((fieldCrop) => {
-                                const culture = fieldCrop.culture as Culture | undefined;
-                                const harvestCycle = fieldCrop.harvest_cycle as HarvestCycle | undefined;
+                                const crop = fieldCrop.crop as any;
+                                const culture = crop?.culture as Culture | undefined;
+                                const cycle = crop?.cycle || "";
                                 return (
                                   <SelectItem key={fieldCrop.id} value={fieldCrop.id}>
-                                    {culture?.name || "Cultura"} - {harvestCycle?.name || "Ciclo"}
+                                    {culture?.name || "Cultura"} - {cycle || "Ciclo"}
                                   </SelectItem>
                                 );
                               })}
