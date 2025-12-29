@@ -37,7 +37,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import type { Field, Farm, SubField, FieldCrop as FieldCropType } from "@/types/schema";
+import type { Field, Farm, SubField, FieldCrop as FieldCropType, Crop } from "@/types/schema";
 import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store/app-store";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -292,11 +292,29 @@ async function updateFieldCropPlanting(
   }
 }
 
+async function fetchCrops(harvestYearId: string | null): Promise<Crop[]> {
+  if (!harvestYearId) return [];
+
+  const { data, error } = await supabase
+    .from("crops")
+    .select("*")
+    .eq("harvest_year_id", harvestYearId)
+    .order("name", { ascending: true });
+
+  if (error) {
+    throw new Error(`Erro ao buscar safras: ${error.message}`);
+  }
+
+  return data || [];
+}
+
 export default function TalhoesPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingField, setEditingField] = useState<Field | null>(null);
   const [plantingDialogOpen, setPlantingDialogOpen] = useState(false);
   const [selectedFieldCrop, setSelectedFieldCrop] = useState<FieldCropType | null>(null);
+  const [filterFieldId, setFilterFieldId] = useState<string | null>(null);
+  const [filterCropId, setFilterCropId] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const { selectedFarmId, selectedHarvestYearId } = useAppStore();
 
@@ -310,6 +328,13 @@ export default function TalhoesPage() {
   const { data: fields = [], isLoading, error: fetchError } = useQuery({
     queryKey: ["fields", selectedFarmId],
     queryFn: () => fetchFields(selectedFarmId),
+  });
+
+  // Query para buscar safras (crops) do ano safra selecionado
+  const { data: crops = [] } = useQuery({
+    queryKey: ["crops", selectedHarvestYearId],
+    queryFn: () => fetchCrops(selectedHarvestYearId),
+    enabled: !!selectedHarvestYearId,
   });
 
   // Query para buscar field_crops de cada talhão
@@ -692,6 +717,65 @@ export default function TalhoesPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {/* Barra de Filtros */}
+          <div className="mb-6 p-4 border rounded-lg bg-muted/50 space-y-4">
+            <div className="flex items-center gap-4 flex-wrap">
+              <div className="flex items-center gap-2">
+                <label className="text-sm font-medium">Filtrar por Talhão:</label>
+                <Select
+                  value={filterFieldId || ""}
+                  onValueChange={(value) => setFilterFieldId(value || null)}
+                >
+                  <SelectTrigger className="w-[200px]">
+                    <SelectValue placeholder="Todos os talhões" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">Todos os talhões</SelectItem>
+                    {fields.map((field) => (
+                      <SelectItem key={field.id} value={field.id}>
+                        {field.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {selectedHarvestYearId && crops.length > 0 && (
+                <div className="flex items-center gap-2">
+                  <label className="text-sm font-medium">Filtrar por Safra:</label>
+                  <Select
+                    value={filterCropId || ""}
+                    onValueChange={(value) => setFilterCropId(value || null)}
+                  >
+                    <SelectTrigger className="w-[200px]">
+                      <SelectValue placeholder="Todas as safras" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">Todas as safras</SelectItem>
+                      {crops.map((crop) => (
+                        <SelectItem key={crop.id} value={crop.id}>
+                          {crop.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {(filterFieldId || filterCropId) && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setFilterFieldId(null);
+                    setFilterCropId(null);
+                  }}
+                >
+                  Limpar Filtros
+                </Button>
+              )}
+            </div>
+          </div>
           {fetchError ? (
             <div className="py-8 text-center text-destructive">
               Erro ao carregar talhões:{" "}
@@ -716,7 +800,24 @@ export default function TalhoesPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {fields.map((field) => {
+                {fields
+                  .filter((field) => {
+                    // Filtro por talhão
+                    if (filterFieldId && field.id !== filterFieldId) return false;
+                    
+                    // Filtro por safra
+                    if (filterCropId) {
+                      const fieldCrops = fieldCropsMap[field.id] || [];
+                      const hasCrop = fieldCrops.some((fc) => {
+                        const crop = fc.crop as any;
+                        return crop?.id === filterCropId;
+                      });
+                      if (!hasCrop) return false;
+                    }
+                    
+                    return true;
+                  })
+                  .map((field) => {
                   const farm = field.farm as Farm | undefined;
                   return (
                     <TableRow key={field.id}>

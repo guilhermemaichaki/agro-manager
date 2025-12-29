@@ -44,11 +44,6 @@ const navigation = [
     icon: FolderTree,
   },
   {
-    name: "Ano Safra",
-    href: "/cadastros/ano-safra",
-    icon: Calendar,
-  },
-  {
     name: "Safras",
     href: "/cadastros/safras",
     icon: Calendar,
@@ -56,11 +51,6 @@ const navigation = [
   {
     name: "Fazendas",
     href: "/cadastros/fazendas",
-    icon: FolderTree,
-  },
-  {
-    name: "Culturas",
-    href: "/cadastros/culturas",
     icon: FolderTree,
   },
   {

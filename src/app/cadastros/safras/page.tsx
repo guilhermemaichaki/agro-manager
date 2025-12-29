@@ -39,6 +39,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store/app-store";
 import type { Crop, Culture, Field } from "@/types/schema";
+import { CultureSelector } from "@/components/culture-selector";
 
 const cropSchema = z.object({
   name: z.string().min(1, "Nome é obrigatório"),
@@ -104,18 +105,7 @@ async function fetchCrops(harvestYearId: string | null, farmId: string | null): 
   return cropsWithCount;
 }
 
-async function fetchCultures(): Promise<Culture[]> {
-  const { data, error } = await supabase
-    .from("cultures")
-    .select("*")
-    .order("name", { ascending: true });
-
-  if (error) {
-    throw new Error(`Erro ao buscar culturas: ${error.message}`);
-  }
-
-  return data || [];
-}
+// Removido: fetchCultures não é mais necessário, CultureSelector gerencia isso
 
 async function fetchFields(farmId: string | null): Promise<Field[]> {
   if (!farmId) return [];
@@ -177,6 +167,8 @@ async function createCropWithFieldCrops(
 
 export default function SafrasPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [filterFieldId, setFilterFieldId] = useState<string | null>(null);
+  const [filterCropId, setFilterCropId] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const { selectedFarmId, selectedHarvestYearId } = useAppStore();
 
@@ -186,10 +178,40 @@ export default function SafrasPage() {
     enabled: !!selectedHarvestYearId,
   });
 
-  const { data: cultures = [] } = useQuery({
-    queryKey: ["cultures"],
-    queryFn: fetchCultures,
+  // Buscar field_crops para filtrar por talhão
+  const { data: allFieldCrops = [] } = useQuery({
+    queryKey: ["field_crops", "for_filter", selectedHarvestYearId, filterFieldId],
+    queryFn: async () => {
+      if (!selectedHarvestYearId) return [];
+      
+      // Buscar crops do ano safra
+      const { data: crops } = await supabase
+        .from("crops")
+        .select("id")
+        .eq("harvest_year_id", selectedHarvestYearId);
+
+      if (!crops || crops.length === 0) return [];
+
+      const cropIds = crops.map((c) => c.id);
+      
+      let query = supabase
+        .from("field_crops")
+        .select("crop_id, field_id")
+        .in("crop_id", cropIds);
+
+      if (filterFieldId) {
+        query = query.eq("field_id", filterFieldId);
+      }
+
+      const { data, error } = await query;
+      if (error) return [];
+      
+      return data || [];
+    },
+    enabled: !!selectedHarvestYearId,
   });
+
+  // Removido: cultures query não é mais necessário aqui, CultureSelector gerencia isso
 
   const { data: fields = [] } = useQuery({
     queryKey: ["fields", selectedFarmId],
@@ -316,20 +338,13 @@ export default function SafrasPage() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Cultura</FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value}>
-                        <FormControl>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Selecione a cultura" />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          {cultures.map((culture) => (
-                            <SelectItem key={culture.id} value={culture.id}>
-                              {culture.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <FormControl>
+                        <CultureSelector
+                          value={field.value}
+                          onChange={field.onChange}
+                          error={form.formState.errors.culture_id?.message}
+                        />
+                      </FormControl>
                       <FormMessage />
                     </FormItem>
                   )}
@@ -487,6 +502,63 @@ export default function SafrasPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {/* Barra de Filtros */}
+          <div className="mb-6 p-4 border rounded-lg bg-muted/50 space-y-4">
+            <div className="flex items-center gap-4 flex-wrap">
+              <div className="flex items-center gap-2">
+                <label className="text-sm font-medium">Filtrar por Talhão:</label>
+                <Select
+                  value={filterFieldId || ""}
+                  onValueChange={(value) => setFilterFieldId(value || null)}
+                >
+                  <SelectTrigger className="w-[200px]">
+                    <SelectValue placeholder="Todos os talhões" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">Todos os talhões</SelectItem>
+                    {fields.map((field) => (
+                      <SelectItem key={field.id} value={field.id}>
+                        {field.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <label className="text-sm font-medium">Filtrar por Safra:</label>
+                <Select
+                  value={filterCropId || ""}
+                  onValueChange={(value) => setFilterCropId(value || null)}
+                >
+                  <SelectTrigger className="w-[200px]">
+                    <SelectValue placeholder="Todas as safras" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">Todas as safras</SelectItem>
+                    {crops.map((crop) => (
+                      <SelectItem key={crop.id} value={crop.id}>
+                        {crop.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {(filterFieldId || filterCropId) && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setFilterFieldId(null);
+                    setFilterCropId(null);
+                  }}
+                >
+                  Limpar Filtros
+                </Button>
+              )}
+            </div>
+          </div>
           {isLoading ? (
             <div className="py-8 text-center text-muted-foreground">
               Carregando safras...
@@ -506,7 +578,22 @@ export default function SafrasPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {crops.map((crop) => {
+                {crops
+                  .filter((crop) => {
+                    // Filtro por safra
+                    if (filterCropId && crop.id !== filterCropId) return false;
+                    
+                    // Filtro por talhão - verificar se a safra tem field_crops no talhão selecionado
+                    if (filterFieldId) {
+                      const hasFieldCrop = allFieldCrops.some(
+                        (fc) => fc.crop_id === crop.id && fc.field_id === filterFieldId
+                      );
+                      return hasFieldCrop;
+                    }
+                    
+                    return true;
+                  })
+                  .map((crop) => {
                   const culture = crop.culture as Culture | undefined;
                   return (
                     <TableRow key={crop.id}>

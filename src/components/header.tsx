@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
-import type { Farm, HarvestYear, Field } from "@/types/schema";
+import type { Farm, HarvestYear } from "@/types/schema";
 
 async function fetchFarms(): Promise<Farm[]> {
   const { data, error } = await supabase
@@ -22,30 +22,20 @@ async function fetchFarms(): Promise<Farm[]> {
   return data || [];
 }
 
-async function fetchHarvestYears(): Promise<HarvestYear[]> {
-  const { data, error } = await supabase
+async function fetchHarvestYears(farmId: string | null): Promise<HarvestYear[]> {
+  let query = supabase
     .from("harvest_years")
     .select("*")
     .order("start_date", { ascending: false });
 
-  if (error) {
-    throw new Error(`Erro ao buscar safras: ${error.message}`);
+  if (farmId) {
+    query = query.eq("farm_id", farmId);
   }
 
-  return data || [];
-}
-
-async function fetchFields(farmId: string | null): Promise<Field[]> {
-  if (!farmId) return [];
-
-  const { data, error } = await supabase
-    .from("fields")
-    .select("*")
-    .eq("farm_id", farmId)
-    .order("name", { ascending: true });
+  const { data, error } = await query;
 
   if (error) {
-    throw new Error(`Erro ao buscar talhões: ${error.message}`);
+    throw new Error(`Erro ao buscar safras: ${error.message}`);
   }
 
   return data || [];
@@ -55,10 +45,8 @@ export function Header() {
   const {
     selectedFarmId,
     selectedHarvestYearId,
-    selectedFieldId,
     setSelectedFarmId,
     setSelectedHarvestYearId,
-    setSelectedFieldId,
   } = useAppStore();
 
   const { data: farms = [], isLoading: isLoadingFarms } = useQuery({
@@ -67,19 +55,12 @@ export function Header() {
   });
 
   const { data: harvestYears = [], isLoading: isLoadingHarvestYears } = useQuery({
-    queryKey: ["harvest_years"],
-    queryFn: fetchHarvestYears,
-  });
-
-  const { data: fields = [], isLoading: isLoadingFields } = useQuery({
-    queryKey: ["fields", selectedFarmId],
-    queryFn: () => fetchFields(selectedFarmId),
-    enabled: !!selectedFarmId,
+    queryKey: ["harvest_years", selectedFarmId],
+    queryFn: () => fetchHarvestYears(selectedFarmId),
   });
 
   const selectedFarm = farms.find((f) => f.id === selectedFarmId);
   const selectedHarvestYear = harvestYears.find((hy) => hy.id === selectedHarvestYearId);
-  const selectedField = fields.find((f) => f.id === selectedFieldId);
 
   return (
     <div className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -119,6 +100,7 @@ export function Header() {
             <Select
               value={selectedHarvestYearId || ""}
               onValueChange={(value) => setSelectedHarvestYearId(value || null)}
+              disabled={!selectedFarmId || isLoadingHarvestYears}
             >
               <SelectTrigger className="w-[200px]">
                 <SelectValue placeholder="Selecione o ano safra">
@@ -126,38 +108,20 @@ export function Header() {
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
-                {harvestYears.map((harvestYear) => (
-                  <SelectItem key={harvestYear.id} value={harvestYear.id}>
-                    {harvestYear.name}
-                  </SelectItem>
-                ))}
+                {harvestYears.length === 0 && selectedFarmId ? (
+                  <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                    Nenhum ano safra cadastrado
+                  </div>
+                ) : (
+                  harvestYears.map((harvestYear) => (
+                    <SelectItem key={harvestYear.id} value={harvestYear.id}>
+                      {harvestYear.name}
+                    </SelectItem>
+                  ))
+                )}
               </SelectContent>
             </Select>
           </div>
-
-          {selectedFarmId && (
-            <div className="flex items-center gap-2">
-              <label className="text-sm font-medium">Talhão:</label>
-              <Select
-                value={selectedFieldId || ""}
-                onValueChange={(value) => setSelectedFieldId(value || null)}
-                disabled={!selectedFarmId || isLoadingFields}
-              >
-                <SelectTrigger className="w-[200px]">
-                  <SelectValue placeholder="Selecione o talhão">
-                    {selectedField?.name || "Selecione o talhão"}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {fields.map((field) => (
-                    <SelectItem key={field.id} value={field.id}>
-                      {field.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
         </div>
       </div>
     </div>

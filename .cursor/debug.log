@@ -1,0 +1,2 @@
+{"location":"safras/page.tsx:62","message":"fetchCrops: checking table existence","data":{"harvestYearId":"98253c43-67f3-43f4-b074-b4878b4ae3b5"},"timestamp":1767043145536,"sessionId":"debug-session","runId":"run1","hypothesisId":"A"}
+{"location":"safras/page.tsx:75","message":"fetchCrops: query result","data":{"dataCount":1},"timestamp":1767043146906,"sessionId":"debug-session","runId":"run1","hypothesisId":"A"}
