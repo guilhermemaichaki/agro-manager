@@ -51,9 +51,11 @@ export interface HarvestCycle {
 export interface Farm {
   id: string;
   name: string;
+  city?: string;
   description?: string;
+  image_url?: string;
   created_at: string;
-  updated_at: string;
+  updated_at?: string;
 }
 
 /**
