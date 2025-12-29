@@ -49,6 +49,11 @@ const navigation = [
     icon: Calendar,
   },
   {
+    name: "Safras",
+    href: "/cadastros/safras",
+    icon: Calendar,
+  },
+  {
     name: "Fazendas",
     href: "/cadastros/fazendas",
     icon: FolderTree,

@@ -98,19 +98,37 @@ export interface SubField {
 }
 
 /**
- * Planejamento de Cultura no Talhão (por Safra e Ciclo)
+ * Safra (Planejamento Macro) - Definição da safra
+ */
+export interface Crop {
+  id: string;
+  harvest_year_id: string;
+  name: string; // Ex: "Soja Intacta"
+  culture_id: string;
+  variety?: string;
+  cycle: string; // "Verão", "Inverno", "Safrinha"
+  estimated_start_date?: string; // Janela Ideal Início
+  estimated_end_date?: string; // Janela Ideal Fim
+  created_at: string;
+  // Relations
+  harvest_year?: HarvestYear;
+  culture?: Culture;
+}
+
+/**
+ * Vínculo de Safra no Talhão (Execução)
  */
 export interface FieldCrop {
   id: string;
   field_id: string;
-  harvest_cycle_id: string;
-  culture_id: string;
+  crop_id: string;
+  status: 'PLANNED' | 'PLANTED';
+  date_planted?: string | null;
+  date_harvest_prediction?: string | null;
   created_at: string;
-  updated_at: string;
   // Relations
   field?: Field;
-  harvest_cycle?: HarvestCycle;
-  culture?: Culture;
+  crop?: Crop;
 }
 
 /**

@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Pencil, Trash2, Calendar } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import {
   Table,
   TableBody,
@@ -36,7 +37,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import type { Field, Farm, SubField } from "@/types/schema";
+import type { Field, Farm, SubField, FieldCrop as FieldCropType } from "@/types/schema";
 import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store/app-store";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -243,11 +244,61 @@ async function deleteField(id: string): Promise<void> {
   }
 }
 
+async function fetchFieldCrops(fieldId: string, harvestYearId: string | null): Promise<FieldCropType[]> {
+  if (!harvestYearId) return [];
+
+  // Buscar crops do ano safra
+  const { data: crops } = await supabase
+    .from("crops")
+    .select("id")
+    .eq("harvest_year_id", harvestYearId);
+
+  if (!crops || crops.length === 0) return [];
+
+  const cropIds = crops.map((c) => c.id);
+
+  const { data, error } = await supabase
+    .from("field_crops")
+    .select(`
+      *,
+      crop:crops(*)
+    `)
+    .eq("field_id", fieldId)
+    .in("crop_id", cropIds);
+
+  if (error) {
+    throw new Error(`Erro ao buscar safras do talhão: ${error.message}`);
+  }
+
+  return (data || []) as FieldCropType[];
+}
+
+async function updateFieldCropPlanting(
+  fieldCropId: string,
+  datePlanted: string,
+  dateHarvestPrediction: string
+): Promise<void> {
+  const { error } = await supabase
+    .from("field_crops")
+    .update({
+      status: "PLANTED",
+      date_planted: datePlanted,
+      date_harvest_prediction: dateHarvestPrediction,
+    } as any)
+    .eq("id", fieldCropId);
+
+  if (error) {
+    throw new Error(`Erro ao confirmar plantio: ${error.message}`);
+  }
+}
+
 export default function TalhoesPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingField, setEditingField] = useState<Field | null>(null);
+  const [plantingDialogOpen, setPlantingDialogOpen] = useState(false);
+  const [selectedFieldCrop, setSelectedFieldCrop] = useState<FieldCropType | null>(null);
   const queryClient = useQueryClient();
-  const { selectedFarmId } = useAppStore();
+  const { selectedFarmId, selectedHarvestYearId } = useAppStore();
 
   // Query para buscar fazendas
   const { data: farms = [] } = useQuery({
@@ -259,6 +310,21 @@ export default function TalhoesPage() {
   const { data: fields = [], isLoading, error: fetchError } = useQuery({
     queryKey: ["fields", selectedFarmId],
     queryFn: () => fetchFields(selectedFarmId),
+  });
+
+  // Query para buscar field_crops de cada talhão
+  const { data: fieldCropsMap = {} } = useQuery({
+    queryKey: ["field_crops", "by_field", selectedHarvestYearId],
+    queryFn: async () => {
+      if (!selectedHarvestYearId) return {};
+      const map: Record<string, FieldCropType[]> = {};
+      for (const field of fields) {
+        const crops = await fetchFieldCrops(field.id, selectedHarvestYearId);
+        map[field.id] = crops;
+      }
+      return map;
+    },
+    enabled: !!selectedHarvestYearId && fields.length > 0,
   });
 
   // Mutation para criar talhão
@@ -299,6 +365,24 @@ export default function TalhoesPage() {
     },
   });
 
+  // Mutation para confirmar plantio
+  const plantingMutation = useMutation({
+    mutationFn: ({ fieldCropId, datePlanted, dateHarvestPrediction }: {
+      fieldCropId: string;
+      datePlanted: string;
+      dateHarvestPrediction: string;
+    }) => updateFieldCropPlanting(fieldCropId, datePlanted, dateHarvestPrediction),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["field_crops"] });
+      setPlantingDialogOpen(false);
+      setSelectedFieldCrop(null);
+      plantingForm.reset();
+    },
+    onError: (error: Error) => {
+      alert(`Erro ao confirmar plantio: ${error.message}`);
+    },
+  });
+
   const form = useForm<FieldFormValues>({
     resolver: zodResolver(fieldSchema),
     defaultValues: {
@@ -313,6 +397,43 @@ export default function TalhoesPage() {
     control: form.control,
     name: "sub_fields",
   });
+
+  const plantingForm = useForm<{ date_planted: string; date_harvest_prediction: string }>({
+    resolver: zodResolver(z.object({
+      date_planted: z.string().min(1, "Data é obrigatória"),
+      date_harvest_prediction: z.string().min(1, "Data é obrigatória"),
+    })),
+    defaultValues: {
+      date_planted: new Date().toISOString().split("T")[0],
+      date_harvest_prediction: "",
+    },
+  });
+
+  const formatDate = (dateString: string | null | undefined): string => {
+    if (!dateString) return "";
+    const date = new Date(dateString);
+    return date.toLocaleDateString("pt-BR");
+  };
+
+  const handleOpenPlantingDialog = (fieldCrop: FieldCropType) => {
+    setSelectedFieldCrop(fieldCrop);
+    plantingForm.reset({
+      date_planted: new Date().toISOString().split("T")[0],
+      date_harvest_prediction: fieldCrop.date_harvest_prediction
+        ? new Date(fieldCrop.date_harvest_prediction).toISOString().split("T")[0]
+        : new Date().toISOString().split("T")[0],
+    });
+    setPlantingDialogOpen(true);
+  };
+
+  const handlePlantingSubmit = (data: { date_planted: string; date_harvest_prediction: string }) => {
+    if (!selectedFieldCrop) return;
+    plantingMutation.mutate({
+      fieldCropId: selectedFieldCrop.id,
+      datePlanted: data.date_planted,
+      dateHarvestPrediction: data.date_harvest_prediction,
+    });
+  };
 
   const onSubmit = (data: FieldFormValues) => {
     if (editingField) {
@@ -602,8 +723,32 @@ export default function TalhoesPage() {
                       <TableCell className="text-muted-foreground">
                         {farm?.name || "-"}
                       </TableCell>
-                      <TableCell className="font-medium">
-                        {field.name}
+                      <TableCell>
+                        <div className="space-y-2">
+                          <div className="font-medium">{field.name}</div>
+                          <div className="flex flex-wrap gap-2">
+                            {(fieldCropsMap[field.id] || []).map((fieldCrop) => {
+                              const crop = fieldCrop.crop as any;
+                              const isPlanned = fieldCrop.status === "PLANNED";
+                              return (
+                                <Badge
+                                  key={fieldCrop.id}
+                                  variant={isPlanned ? "secondary" : "default"}
+                                  className={`cursor-pointer ${
+                                    isPlanned
+                                      ? "bg-yellow-100 text-yellow-800 hover:bg-yellow-200"
+                                      : "bg-green-100 text-green-800"
+                                  }`}
+                                  onClick={() => isPlanned && handleOpenPlantingDialog(fieldCrop)}
+                                >
+                                  {isPlanned
+                                    ? `Planejado: ${crop?.name || "Safra"}`
+                                    : `Plantado em: ${formatDate(fieldCrop.date_planted)}`}
+                                </Badge>
+                              );
+                            })}
+                          </div>
+                        </div>
                       </TableCell>
                       <TableCell>{formatArea(field)}</TableCell>
                     <TableCell className="text-right">
@@ -633,6 +778,59 @@ export default function TalhoesPage() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={plantingDialogOpen} onOpenChange={setPlantingDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirmar Plantio</DialogTitle>
+            <DialogDescription>
+              Registre a data real do plantio e atualize a previsão de colheita
+            </DialogDescription>
+          </DialogHeader>
+          <Form {...plantingForm}>
+            <form onSubmit={plantingForm.handleSubmit(handlePlantingSubmit)} className="space-y-4">
+              <FormField
+                control={plantingForm.control}
+                name="date_planted"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Data Real do Plantio</FormLabel>
+                    <FormControl>
+                      <Input type="date" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={plantingForm.control}
+                name="date_harvest_prediction"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Nova Previsão de Colheita</FormLabel>
+                    <FormControl>
+                      <Input type="date" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setPlantingDialogOpen(false)}
+                >
+                  Cancelar
+                </Button>
+                <Button type="submit" disabled={plantingMutation.isPending}>
+                  Confirmar Plantio
+                </Button>
+              </DialogFooter>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

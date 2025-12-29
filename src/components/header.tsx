@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAppStore } from "@/store/app-store";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -8,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
-import type { Farm, HarvestYear, HarvestCycle, Field } from "@/types/schema";
+import type { Farm, HarvestYear, Field } from "@/types/schema";
 
 async function fetchFarms(): Promise<Farm[]> {
   const { data, error } = await supabase
@@ -36,51 +35,14 @@ async function fetchHarvestYears(): Promise<HarvestYear[]> {
   return data || [];
 }
 
-async function fetchHarvestCycles(harvestYearId: string | null): Promise<HarvestCycle[]> {
-  if (!harvestYearId) return [];
-
-  const { data, error } = await supabase
-    .from("harvest_cycles")
-    .select("*")
-    .eq("harvest_year_id", harvestYearId)
-    .order("name", { ascending: true });
-
-  if (error) {
-    throw new Error(`Erro ao buscar ciclos: ${error.message}`);
-  }
-
-  return data || [];
-}
-
-async function fetchFields(
-  farmId: string | null,
-  harvestCycleId: string | null
-): Promise<Field[]> {
+async function fetchFields(farmId: string | null): Promise<Field[]> {
   if (!farmId) return [];
 
-  let query = supabase
+  const { data, error } = await supabase
     .from("fields")
     .select("*")
     .eq("farm_id", farmId)
     .order("name", { ascending: true });
-
-  // Se há ciclo selecionado, filtrar apenas talhões que têm planejamento naquele ciclo
-  if (harvestCycleId) {
-    const { data: fieldCrops } = await supabase
-      .from("field_crops")
-      .select("field_id")
-      .eq("harvest_cycle_id", harvestCycleId);
-
-    if (fieldCrops && fieldCrops.length > 0) {
-      const fieldIds = fieldCrops.map((fc) => fc.field_id);
-      query = query.in("id", fieldIds);
-    } else {
-      // Se não há planejamentos, retornar array vazio
-      return [];
-    }
-  }
-
-  const { data, error } = await query;
 
   if (error) {
     throw new Error(`Erro ao buscar talhões: ${error.message}`);
@@ -93,11 +55,9 @@ export function Header() {
   const {
     selectedFarmId,
     selectedHarvestYearId,
-    selectedHarvestCycleId,
     selectedFieldId,
     setSelectedFarmId,
     setSelectedHarvestYearId,
-    setSelectedHarvestCycleId,
     setSelectedFieldId,
   } = useAppStore();
 
@@ -111,28 +71,14 @@ export function Header() {
     queryFn: fetchHarvestYears,
   });
 
-  const { data: harvestCycles = [], isLoading: isLoadingHarvestCycles } = useQuery({
-    queryKey: ["harvest_cycles", selectedHarvestYearId],
-    queryFn: () => fetchHarvestCycles(selectedHarvestYearId),
-    enabled: !!selectedHarvestYearId,
-  });
-
   const { data: fields = [], isLoading: isLoadingFields } = useQuery({
-    queryKey: ["fields", selectedFarmId, selectedHarvestCycleId],
-    queryFn: () => fetchFields(selectedFarmId, selectedHarvestCycleId),
+    queryKey: ["fields", selectedFarmId],
+    queryFn: () => fetchFields(selectedFarmId),
     enabled: !!selectedFarmId,
   });
 
-  // Reset cycle e field quando harvest year muda
-  useEffect(() => {
-    if (selectedHarvestYearId) {
-      // O reset já é feito no store quando setSelectedHarvestYearId é chamado
-    }
-  }, [selectedHarvestYearId]);
-
   const selectedFarm = farms.find((f) => f.id === selectedFarmId);
   const selectedHarvestYear = harvestYears.find((hy) => hy.id === selectedHarvestYearId);
-  const selectedHarvestCycle = harvestCycles.find((hc) => hc.id === selectedHarvestCycleId);
   const selectedField = fields.find((f) => f.id === selectedFieldId);
 
   return (
@@ -188,30 +134,6 @@ export function Header() {
               </SelectContent>
             </Select>
           </div>
-
-          {selectedHarvestYearId && (
-            <div className="flex items-center gap-2">
-              <label className="text-sm font-medium">Safra/Ciclo:</label>
-              <Select
-                value={selectedHarvestCycleId || ""}
-                onValueChange={(value) => setSelectedHarvestCycleId(value || null)}
-                disabled={!selectedHarvestYearId || isLoadingHarvestCycles}
-              >
-                <SelectTrigger className="w-[200px]">
-                  <SelectValue placeholder="Selecione o ciclo">
-                    {selectedHarvestCycle?.name || "Selecione o ciclo"}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {harvestCycles.map((cycle) => (
-                    <SelectItem key={cycle.id} value={cycle.id}>
-                      {cycle.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
 
           {selectedFarmId && (
             <div className="flex items-center gap-2">
