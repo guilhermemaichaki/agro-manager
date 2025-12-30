@@ -34,7 +34,7 @@ const navigation = [
     icon: Package,
   },
   {
-    name: "Cadastros",
+    name: "Produtos",
     href: "/cadastros/produtos",
     icon: FolderTree,
   },

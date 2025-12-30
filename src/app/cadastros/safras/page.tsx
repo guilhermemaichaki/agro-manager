@@ -172,7 +172,7 @@ export default function SafrasPage() {
   const queryClient = useQueryClient();
   const { selectedFarmId, selectedHarvestYearId } = useAppStore();
 
-  const { data: crops = [], isLoading } = useQuery({
+  const { data: crops = [], isLoading, error: cropsError } = useQuery({
     queryKey: ["crops", selectedHarvestYearId, selectedFarmId],
     queryFn: () => fetchCrops(selectedHarvestYearId, selectedFarmId),
     enabled: !!selectedHarvestYearId,
@@ -508,14 +508,14 @@ export default function SafrasPage() {
               <div className="flex items-center gap-2">
                 <label className="text-sm font-medium">Filtrar por Talhão:</label>
                 <Select
-                  value={filterFieldId || ""}
-                  onValueChange={(value) => setFilterFieldId(value || null)}
+                  value={filterFieldId || "all"}
+                  onValueChange={(value) => setFilterFieldId(value === "all" ? null : value)}
                 >
                   <SelectTrigger className="w-[200px]">
                     <SelectValue placeholder="Todos os talhões" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">Todos os talhões</SelectItem>
+                    <SelectItem value="all">Todos os talhões</SelectItem>
                     {fields.map((field) => (
                       <SelectItem key={field.id} value={field.id}>
                         {field.name}
@@ -528,14 +528,14 @@ export default function SafrasPage() {
               <div className="flex items-center gap-2">
                 <label className="text-sm font-medium">Filtrar por Safra:</label>
                 <Select
-                  value={filterCropId || ""}
-                  onValueChange={(value) => setFilterCropId(value || null)}
+                  value={filterCropId || "all"}
+                  onValueChange={(value) => setFilterCropId(value === "all" ? null : value)}
                 >
                   <SelectTrigger className="w-[200px]">
                     <SelectValue placeholder="Todas as safras" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">Todas as safras</SelectItem>
+                    <SelectItem value="all">Todas as safras</SelectItem>
                     {crops.map((crop) => (
                       <SelectItem key={crop.id} value={crop.id}>
                         {crop.name}

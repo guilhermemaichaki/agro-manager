@@ -27,10 +27,14 @@ export enum StockMovementType {
  */
 export interface HarvestYear {
   id: string;
+  farm_id: string;
   name: string; // Ex: "2024/2025"
   start_date: string; // ISO date string
   end_date: string; // ISO date string
+  active?: boolean;
   created_at: string;
+  // Relations
+  farm?: Farm;
 }
 
 /**
@@ -134,6 +138,17 @@ export interface FieldCrop {
 }
 
 /**
+ * Categoria de Produto
+ */
+export interface Category {
+  id: string;
+  name: string;
+  type: 'predefined' | 'custom';
+  group_name: 'defensivos' | 'adjuvantes' | 'custom';
+  created_at: string;
+}
+
+/**
  * Produto - Defensivo agrícola
  */
 export interface Product {
@@ -145,6 +160,8 @@ export interface Product {
   description?: string;
   created_at: string;
   updated_at: string;
+  // Relations
+  categories?: Category[];
 }
 
 /**
@@ -292,6 +309,7 @@ export interface CreateProductInput {
   active_principle: string;
   unit: string;
   description?: string;
+  category_ids?: string[];
 }
 
 export interface UpdateProductInput extends Partial<CreateProductInput> {

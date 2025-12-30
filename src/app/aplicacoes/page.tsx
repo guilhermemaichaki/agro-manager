@@ -221,6 +221,17 @@ async function createApplication(data: CreateApplicationInput): Promise<Applicat
   if (statusValue === "completed" || statusValue === "done") statusValue = "DONE";
   if (statusValue === "cancelled" || statusValue === "canceled") statusValue = "CANCELED";
 
+  const isCreatingAsDone = statusValue === "DONE";
+
+  // Se está criando como DONE, verificar estoque primeiro
+  if (isCreatingAsDone && data.products && data.products.length > 0) {
+    const productsToCheck = data.products.map((p) => ({ 
+      product_id: p.product_id, 
+      quantity_used: p.quantity_used 
+    }));
+    await checkStockAvailability("", productsToCheck); // ID vazio pois é nova aplicação
+  }
+
   // 1. Salvar aplicação
   const { data: newApplication, error: appError } = await supabase
     .from("applications")
@@ -260,6 +271,30 @@ async function createApplication(data: CreateApplicationInput): Promise<Applicat
       await supabase.from("applications").delete().eq("id", newApplication.id);
       throw new Error(`Erro ao salvar produtos: ${productsError.message}`);
     }
+
+    // 3. Se criou como DONE, criar movimentações de saída no estoque
+    if (isCreatingAsDone) {
+      const exitMovements = data.products.map((ap) => ({
+        product_id: ap.product_id,
+        movement_type: "exit" as const,
+        quantity: ap.quantity_used || 0,
+        reference_id: newApplication.id,
+        reference_type: "application" as const,
+        movement_date: data.application_date,
+        notes: `Saída por aplicação ${newApplication.id}`,
+      }));
+
+      const { error: movementsError } = await supabase
+        .from("stock_movements")
+        .insert(exitMovements as any);
+
+      if (movementsError) {
+        // Rollback: deletar aplicação e produtos
+        await supabase.from("application_products").delete().eq("application_id", newApplication.id);
+        await supabase.from("applications").delete().eq("id", newApplication.id);
+        throw new Error(`Erro ao criar movimentações de estoque: ${movementsError.message}`);
+      }
+    }
   }
 
   // Buscar aplicação completa com relacionamentos
@@ -284,9 +319,144 @@ async function createApplication(data: CreateApplicationInput): Promise<Applicat
   return fullApplication as Application;
 }
 
+// Função para verificar disponibilidade de estoque
+async function checkStockAvailability(applicationId: string, applicationProducts: Array<{ product_id: string; quantity_used: number }>): Promise<void> {
+  // Buscar todas as movimentações de estoque
+  const { data: movements, error: movementsError } = await supabase
+    .from("stock_movements")
+    .select("*");
+
+  if (movementsError) {
+    throw new Error(`Erro ao buscar movimentações: ${movementsError.message}`);
+  }
+
+  // Buscar todas as aplicações planejadas (exceto a atual)
+  const { data: plannedApps, error: appsError } = await supabase
+    .from("applications")
+    .select(`
+      id,
+      application_products:application_products(
+        product_id,
+        quantity_used
+      )
+    `)
+    .in("status", ["PLANNED", "planned"])
+    .neq("id", applicationId);
+
+  if (appsError) {
+    throw new Error(`Erro ao buscar aplicações planejadas: ${appsError.message}`);
+  }
+
+  // Buscar todos os produtos necessários de uma vez
+  const productIds = applicationProducts.map((ap) => ap.product_id);
+  const { data: products, error: productsError } = await supabase
+    .from("products")
+    .select("id, name, unit")
+    .in("id", productIds);
+
+  if (productsError) {
+    throw new Error(`Erro ao buscar produtos: ${productsError.message}`);
+  }
+
+  const productsMap = new Map(products?.map((p) => [p.id, p]) || []);
+
+  // Calcular estoque atual e quantidade prevista por produto
+  const stockMap = new Map<string, { current: number; planned: number }>();
+
+  // Calcular estoque atual (entradas - saídas)
+  movements?.forEach((movement) => {
+    const productId = movement.product_id;
+    const quantity = movement.quantity;
+    const type = movement.movement_type;
+
+    if (!stockMap.has(productId)) {
+      stockMap.set(productId, { current: 0, planned: 0 });
+    }
+
+    const stock = stockMap.get(productId)!;
+    if (type === "entry" || (type as string) === "IN") {
+      stock.current += quantity;
+    } else if (type === "exit" || (type as string) === "OUT") {
+      stock.current -= quantity;
+    }
+  });
+
+  // Calcular quantidade prevista (subtrair aplicações planejadas)
+  plannedApps?.forEach((app) => {
+    const products = app.application_products as Array<{ product_id: string; quantity_used: number }> | null;
+    if (products) {
+      products.forEach((ap) => {
+        const stock = stockMap.get(ap.product_id);
+        if (stock) {
+          stock.planned += ap.quantity_used || 0;
+        } else {
+          stockMap.set(ap.product_id, { current: 0, planned: ap.quantity_used || 0 });
+        }
+      });
+    }
+  });
+
+  // Verificar se há estoque suficiente para cada produto da aplicação
+  const errors: string[] = [];
+  applicationProducts.forEach((ap) => {
+    const stock = stockMap.get(ap.product_id) || { current: 0, planned: 0 };
+    const predictedQuantity = stock.current - stock.planned;
+    const requiredQuantity = ap.quantity_used || 0;
+
+    if (predictedQuantity < requiredQuantity) {
+      const product = productsMap.get(ap.product_id);
+      const productName = product?.name || "Produto";
+      const unit = product?.unit || "";
+      errors.push(
+        `${productName}: Quantidade disponível: ${predictedQuantity.toFixed(2)} ${unit}, Quantidade necessária: ${requiredQuantity.toFixed(2)} ${unit}`
+      );
+    }
+  });
+
+  if (errors.length > 0) {
+    throw new Error(
+      `Não há produto suficiente no estoque para realizar esta aplicação.\n\n${errors.join("\n")}`
+    );
+  }
+}
+
 // Função para atualizar aplicação
 async function updateApplication(data: UpdateApplicationInput): Promise<Application> {
   const { id, products, ...updateData } = data;
+
+  // Buscar aplicação atual para verificar status anterior
+  const { data: currentApplication, error: fetchCurrentError } = await supabase
+    .from("applications")
+    .select(`
+      *,
+      application_products:application_products(
+        product_id,
+        quantity_used
+      )
+    `)
+    .eq("id", id)
+    .single();
+
+  if (fetchCurrentError || !currentApplication) {
+    throw new Error("Erro ao buscar aplicação atual");
+  }
+
+  const currentStatus = currentApplication.status as string;
+  const isChangingToDone = 
+    (currentStatus === "PLANNED" || currentStatus === "planned") &&
+    (updateData.status === "completed" || updateData.status === "done" || updateData.status === "DONE");
+
+  // Se está mudando para DONE, verificar estoque
+  if (isChangingToDone) {
+    // Usar produtos fornecidos ou produtos atuais da aplicação
+    const productsToCheck = products && products.length > 0
+      ? products.map((p) => ({ product_id: p.product_id, quantity_used: p.quantity_used }))
+      : (currentApplication.application_products as Array<{ product_id: string; quantity_used: number }> || []);
+
+    if (productsToCheck.length > 0) {
+      await checkStockAvailability(id, productsToCheck);
+    }
+  }
 
   // Normaliza o status se fornecido
   let statusValue = updateData.status;
@@ -334,6 +504,50 @@ async function updateApplication(data: UpdateApplicationInput): Promise<Applicat
 
     if (productsError) {
       throw new Error(`Erro ao atualizar produtos: ${productsError.message}`);
+    }
+  }
+
+  // 3. Se mudou para DONE, criar movimentações de saída no estoque
+  if (isChangingToDone) {
+    const productsToDeduct = products && products.length > 0
+      ? products
+      : (currentApplication.application_products as Array<{ product_id: string; quantity_used: number }> || []);
+
+    if (productsToDeduct.length > 0) {
+      const exitMovements = productsToDeduct.map((ap) => ({
+        product_id: ap.product_id,
+        movement_type: "exit" as const,
+        quantity: ap.quantity_used || 0,
+        reference_id: id,
+        reference_type: "application" as const,
+        movement_date: updateData.application_date || currentApplication.application_date,
+        notes: `Saída por aplicação ${id}`,
+      }));
+
+      // #region agent log
+      try {
+        fetch('http://127.0.0.1:7242/ingest/df53d563-b320-4db6-8da2-ea422df09482',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'aplicacoes/page.tsx:516',message:'updateApplication before stock movements insert',data:{exitMovementsCount:exitMovements.length,hasReferenceId:exitMovements[0]?.reference_id,hasReferenceType:exitMovements[0]?.reference_type},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      } catch (e) {}
+      // #endregion
+
+      const { error: movementsError } = await supabase
+        .from("stock_movements")
+        .insert(exitMovements as any);
+
+      // #region agent log
+      try {
+        fetch('http://127.0.0.1:7242/ingest/df53d563-b320-4db6-8da2-ea422df09482',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'aplicacoes/page.tsx:530',message:'updateApplication stock movements insert result',data:{error:movementsError?.message,errorCode:movementsError?.code,errorDetails:movementsError?.details},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      } catch (e) {}
+      // #endregion
+
+      if (movementsError) {
+        // Rollback: reverter status da aplicação
+        await supabase
+          .from("applications")
+          .update({ status: currentStatus })
+          .eq("id", id);
+        throw new Error(`Erro ao criar movimentações de estoque: ${movementsError.message}`);
+      }
     }
   }
 
@@ -434,6 +648,8 @@ export default function AplicacoesPage() {
     mutationFn: createApplication,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["applications"] });
+      queryClient.invalidateQueries({ queryKey: ["stock_balance"] });
+      queryClient.invalidateQueries({ queryKey: ["stock_entries"] });
       setIsDialogOpen(false);
       form.reset();
     },
@@ -446,6 +662,8 @@ export default function AplicacoesPage() {
     mutationFn: updateApplication,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["applications"] });
+      queryClient.invalidateQueries({ queryKey: ["stock_balance"] });
+      queryClient.invalidateQueries({ queryKey: ["stock_entries"] });
       setIsDialogOpen(false);
       setEditingApplication(null);
       form.reset();
