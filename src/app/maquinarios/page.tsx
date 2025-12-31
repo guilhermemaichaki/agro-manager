@@ -42,7 +42,7 @@ import Image from "next/image";
 const machinerySchema = z.object({
   name: z.string().min(1, "Nome é obrigatório"),
   type: z.enum(["pulverizador", "drone", "aviao"], {
-    required_error: "Tipo é obrigatório",
+    message: "Tipo é obrigatório",
   }),
   tank_capacity_liters: z.number().positive("Capacidade deve ser maior que zero"),
   photo_url: z.string().optional(),
