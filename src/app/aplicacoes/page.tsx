@@ -75,7 +75,7 @@ const applicationSchema = z.object({
   harvest_year_id: z.string().min(1, "Ano Safra é obrigatório"),
   field_id: z.string().min(1, "Talhão é obrigatório"),
   field_crop_id: z.string().min(1, "Cultura/Ciclo é obrigatório"),
-  is_partial: z.boolean().default(false), // Aplicação parcial
+  is_partial: z.boolean(), // Aplicação parcial
   partial_area: z.number().optional(), // Área em hectares para aplicação parcial
   application_date: z.string().min(1, "Data é obrigatória"),
   status: z.enum(["planned", "completed", "cancelled", "PLANNED", "DONE", "CANCELED"]),
