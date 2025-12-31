@@ -9,6 +9,7 @@ import {
   Package,
   FolderTree,
   Settings,
+  Tractor,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -17,11 +18,6 @@ const navigation = [
     name: "Dashboard",
     href: "/",
     icon: LayoutDashboard,
-  },
-  {
-    name: "Agenda",
-    href: "/agenda",
-    icon: Calendar,
   },
   {
     name: "Aplicações",
@@ -52,6 +48,11 @@ const navigation = [
     name: "Fazendas",
     href: "/cadastros/fazendas",
     icon: FolderTree,
+  },
+  {
+    name: "Maquinários",
+    href: "/maquinarios",
+    icon: Tractor,
   },
   {
     name: "Configurações",

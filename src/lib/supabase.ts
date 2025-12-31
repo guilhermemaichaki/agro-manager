@@ -14,7 +14,9 @@ if (!supabaseUrl || !supabaseAnonKey) {
 // Nota: Tipos customizados podem ser adicionados depois quando necessário
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
-    persistSession: false, // Não persistir sessão no cliente (pode ajustar conforme necessário)
+    persistSession: true, // Persistir sessão para manter autenticação
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
   },
 });
 

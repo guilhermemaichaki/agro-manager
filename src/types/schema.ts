@@ -218,6 +218,7 @@ export interface CurrentStock {
  */
 export interface Application {
   id: string;
+  name: string; // Nome da aplicação
   field_id: string;
   harvest_year_id: string;
   application_date: string; // ISO date string (data planejada ou realizada)
@@ -267,6 +268,56 @@ export interface StockMovement {
   created_at: string;
   // Relations
   product?: Product;
+}
+
+/**
+ * Maquinário - Pulverizador, Drone ou Avião
+ */
+export interface Machinery {
+  id: string;
+  user_id: string;
+  name: string;
+  type: 'pulverizador' | 'drone' | 'aviao';
+  tank_capacity_liters: number;
+  photo_url?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Receita Prática - Receita gerada para aplicação no campo
+ */
+export interface PracticalRecipe {
+  id: string;
+  application_id: string;
+  machinery_id: string;
+  capacity_used_percent: number; // Percentual da capacidade usada
+  application_rate_liters_per_hectare: number; // Taxa de aplicação (L/ha)
+  liters_of_solution?: number; // Litros de calda definidos
+  area_hectares?: number; // Área em hectares calculada
+  multiplier: number; // Quantas vezes aplicar essa receita
+  created_at: string;
+  created_by: string;
+  // Relations
+  machinery?: Machinery;
+  application?: Application;
+  products?: PracticalRecipeProduct[];
+}
+
+/**
+ * Produto da Receita Prática
+ */
+export interface PracticalRecipeProduct {
+  id: string;
+  practical_recipe_id: string;
+  product_id: string;
+  dosage: number; // Dosagem original do produto
+  quantity_in_recipe: number; // Quantidade na receita
+  remaining_quantity: number; // Quantidade restante após essa receita
+  created_at: string;
+  // Relations
+  product?: Product;
+  practical_recipe?: PracticalRecipe;
 }
 
 // ============================================
@@ -327,6 +378,7 @@ export interface CreateStockEntryInput {
 }
 
 export interface CreateApplicationInput {
+  name: string; // Nome da aplicação
   field_id: string;
   harvest_year_id: string;
   application_date: string;
@@ -354,6 +406,17 @@ export interface CreateHarvestYearInput {
   start_date: string;
   end_date: string;
   cycles: string[]; // Array de nomes de ciclos
+}
+
+export interface CreateMachineryInput {
+  name: string;
+  type: 'pulverizador' | 'drone' | 'aviao';
+  tank_capacity_liters: number;
+  photo_url?: string;
+}
+
+export interface UpdateMachineryInput extends Partial<CreateMachineryInput> {
+  id: string;
 }
 
 // ============================================

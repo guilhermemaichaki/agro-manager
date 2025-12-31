@@ -37,23 +37,17 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import type { Field, Farm, SubField, FieldCrop as FieldCropType, Crop } from "@/types/schema";
+import type { Field, Farm, FieldCrop as FieldCropType, Crop } from "@/types/schema";
 import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store/app-store";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { X } from "lucide-react";
 
 // Schema de validação
-const subFieldSchema = z.object({
-  name: z.string().min(1, "Nome é obrigatório"),
-  area_hectares: z.number().positive("Área deve ser maior que zero"),
-});
-
 const fieldSchema = z.object({
   farm_id: z.string().min(1, "Fazenda é obrigatória"),
   name: z.string().min(1, "Nome é obrigatório"),
   area_hct: z.number().positive("Área deve ser maior que zero"),
-  sub_fields: z.array(subFieldSchema).optional(),
 });
 
 type FieldFormValues = z.infer<typeof fieldSchema>;
@@ -63,7 +57,6 @@ interface CreateFieldInput {
   farm_id: string;
   name: string;
   area_hct: number;
-  sub_fields?: Array<{ name: string; area_hectares: number }>;
 }
 
 interface UpdateFieldInput extends Partial<CreateFieldInput> {
@@ -87,8 +80,7 @@ async function fetchFarms(): Promise<Farm[]> {
 async function fetchFields(farmId?: string | null): Promise<Field[]> {
   let query = supabase.from("fields").select(`
     *,
-    farm:farms(*),
-    sub_fields:sub_fields(*)
+    farm:farms(*)
   `);
 
   if (farmId) {
@@ -99,20 +91,6 @@ async function fetchFields(farmId?: string | null): Promise<Field[]> {
 
   if (error) {
     throw new Error(`Erro ao buscar talhões: ${error.message}`);
-  }
-
-  return data || [];
-}
-
-async function fetchSubFields(fieldId: string): Promise<SubField[]> {
-  const { data, error } = await supabase
-    .from("sub_fields")
-    .select("*")
-    .eq("field_id", fieldId)
-    .order("name", { ascending: true });
-
-  if (error) {
-    throw new Error(`Erro ao buscar sub-talhões: ${error.message}`);
   }
 
   return data || [];
@@ -138,32 +116,12 @@ async function createField(data: CreateFieldInput): Promise<Field> {
     throw new Error("Talhão não foi criado");
   }
 
-  // 2. Criar sub-talhões se houver
-  if (data.sub_fields && data.sub_fields.length > 0) {
-    const subFieldsData = data.sub_fields.map((sf) => ({
-      field_id: newField.id,
-      name: sf.name,
-      area_hectares: sf.area_hectares,
-    }));
-
-    const { error: subFieldsError } = await supabase
-      .from("sub_fields")
-      .insert(subFieldsData as any);
-
-    if (subFieldsError) {
-      // Se falhar, tenta deletar o talhão criado
-      await supabase.from("fields").delete().eq("id", newField.id);
-      throw new Error(`Erro ao criar sub-talhões: ${subFieldsError.message}`);
-    }
-  }
-
   // Buscar talhão completo com relacionamentos
   const { data: fullField, error: fetchError } = await supabase
     .from("fields")
     .select(`
       *,
-      farm:farms(*),
-      sub_fields:sub_fields(*)
+      farm:farms(*)
     `)
     .eq("id", newField.id)
     .single();
@@ -176,7 +134,7 @@ async function createField(data: CreateFieldInput): Promise<Field> {
 }
 
 async function updateField(data: UpdateFieldInput): Promise<Field> {
-  const { id, sub_fields, ...updateData } = data;
+  const { id, ...updateData } = data;
 
   // Prepara o objeto de atualização
   const updatePayload: Record<string, any> = {};
@@ -185,7 +143,7 @@ async function updateField(data: UpdateFieldInput): Promise<Field> {
   if (updateData.area_hct !== undefined) updatePayload.area_hct = updateData.area_hct;
   updatePayload.updated_at = new Date().toISOString();
 
-  // 1. Atualizar talhão
+  // Atualizar talhão
   const { error: fieldError } = await supabase
     .from("fields")
     .update(updatePayload)
@@ -195,36 +153,12 @@ async function updateField(data: UpdateFieldInput): Promise<Field> {
     throw new Error(`Erro ao atualizar talhão: ${fieldError.message}`);
   }
 
-  // 2. Atualizar sub-talhões se fornecidos
-  if (sub_fields !== undefined) {
-    // Deletar sub-talhões antigos
-    await supabase.from("sub_fields").delete().eq("field_id", id);
-
-    // Inserir novos sub-talhões
-    if (sub_fields.length > 0) {
-      const subFieldsData = sub_fields.map((sf) => ({
-        field_id: id,
-        name: sf.name,
-        area_hectares: sf.area_hectares,
-      }));
-
-      const { error: subFieldsError } = await supabase
-        .from("sub_fields")
-        .insert(subFieldsData as any);
-
-      if (subFieldsError) {
-        throw new Error(`Erro ao atualizar sub-talhões: ${subFieldsError.message}`);
-      }
-    }
-  }
-
   // Buscar talhão atualizado
   const { data: updatedField, error: fetchError } = await supabase
     .from("fields")
     .select(`
       *,
-      farm:farms(*),
-      sub_fields:sub_fields(*)
+      farm:farms(*)
     `)
     .eq("id", id)
     .single();
@@ -418,13 +352,7 @@ export default function TalhoesPage() {
       farm_id: selectedFarmId || "",
       name: "",
       area_hct: 0,
-      sub_fields: [],
     },
-  });
-
-  const { fields: subFieldFields, append: appendSubField, remove: removeSubField } = useFieldArray({
-    control: form.control,
-    name: "sub_fields",
   });
 
   const plantingForm = useForm<{ date_planted: string; date_harvest_prediction: string }>({
@@ -474,18 +402,12 @@ export default function TalhoesPage() {
 
   const handleEdit = async (field: Field) => {
     setEditingField(field);
-    // Buscar sub-talhões
-    const subFields = await fetchSubFields(field.id);
     // Usa area_hct se existir, senão tenta area_hectares (do schema)
     const area = (field as any).area_hct ?? field.area_hectares ?? 0;
     form.reset({
       farm_id: field.farm_id || "",
       name: field.name,
       area_hct: area,
-      sub_fields: subFields.map((sf) => ({
-        name: sf.name,
-        area_hectares: sf.area_hectares,
-      })),
     });
     setIsDialogOpen(true);
   };
@@ -610,84 +532,6 @@ export default function TalhoesPage() {
                     </FormItem>
                   )}
                 />
-
-                {/* Seção de Sub-talhões */}
-                <div className="space-y-4 border-t pt-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h4 className="text-sm font-medium">Sub-talhões</h4>
-                      <p className="text-xs text-muted-foreground">
-                        Adicione sub-áreas dentro deste talhão
-                      </p>
-                    </div>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => appendSubField({ name: "", area_hectares: 0 })}
-                    >
-                      <Plus className="mr-2 h-4 w-4" />
-                      Adicionar Sub-talhão
-                    </Button>
-                  </div>
-
-                  {subFieldFields.length === 0 ? (
-                    <p className="text-sm text-muted-foreground text-center py-4">
-                      Nenhum sub-talhão adicionado
-                    </p>
-                  ) : (
-                    <div className="space-y-3">
-                      {subFieldFields.map((field, index) => (
-                        <div key={field.id} className="flex gap-2 items-end">
-                          <FormField
-                            control={form.control}
-                            name={`sub_fields.${index}.name`}
-                            render={({ field }) => (
-                              <FormItem className="flex-1">
-                                <FormLabel>Nome</FormLabel>
-                                <FormControl>
-                                  <Input placeholder="Ex: Sub-talhão A" {...field} />
-                                </FormControl>
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
-                          <FormField
-                            control={form.control}
-                            name={`sub_fields.${index}.area_hectares`}
-                            render={({ field }) => (
-                              <FormItem className="w-32">
-                                <FormLabel>Tamanho (ha)</FormLabel>
-                                <FormControl>
-                                  <Input
-                                    type="number"
-                                    step="0.1"
-                                    placeholder="0.0"
-                                    value={field.value || ""}
-                                    onChange={(e) => {
-                                      const value = parseFloat(e.target.value);
-                                      field.onChange(isNaN(value) ? 0 : value);
-                                    }}
-                                    onBlur={field.onBlur}
-                                  />
-                                </FormControl>
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => removeSubField(index)}
-                          >
-                            <X className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
 
                 <DialogFooter>
                   <Button

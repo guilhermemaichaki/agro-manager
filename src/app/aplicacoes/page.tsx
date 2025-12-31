@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2, X } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Plus, Pencil, Trash2, X, FileText, CheckCircle, List, Filter } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -39,6 +40,7 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -51,8 +53,9 @@ import type {
   HarvestYear,
   ApplicationStatus,
   FieldCrop,
-  SubField,
   Culture,
+  Machinery,
+  PracticalRecipe,
 } from "@/types/schema";
 import { supabase } from "@/lib/supabase";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -63,15 +66,17 @@ const applicationProductSchema = z.object({
   dosage: z.number().positive("Dosagem deve ser maior que zero"),
   dosage_unit: z.enum(["L/ha", "mL/ha", "kg/ha"]),
   quantity_used: z.number().positive("Quantidade deve ser maior que zero"),
+  cost: z.number().optional(), // Custo da aplicação
 });
 
 // Schema de validação para aplicação
 const applicationSchema = z.object({
+  name: z.string().min(1, "Nome da aplicação é obrigatório"),
   harvest_year_id: z.string().min(1, "Ano Safra é obrigatório"),
   field_id: z.string().min(1, "Talhão é obrigatório"),
-  field_crop_id: z.string().optional(), // Cultura/Ciclo planejado
-  is_partial: z.boolean().optional(), // Aplicação parcial
-  sub_field_ids: z.array(z.string()).optional(), // Sub-talhões selecionados
+  field_crop_id: z.string().min(1, "Cultura/Ciclo é obrigatório"),
+  is_partial: z.boolean().default(false), // Aplicação parcial
+  partial_area: z.number().optional(), // Área em hectares para aplicação parcial
   application_date: z.string().min(1, "Data é obrigatória"),
   status: z.enum(["planned", "completed", "cancelled", "PLANNED", "DONE", "CANCELED"]),
   notes: z.string().optional(),
@@ -82,11 +87,15 @@ type ApplicationFormValues = z.infer<typeof applicationSchema>;
 
 // Tipos para API
 interface CreateApplicationInput {
+  name: string; // Nome da aplicação
   harvest_year_id: string;
   field_id: string;
+  field_crop_id: string;
   application_date: string;
   status: string;
   notes?: string;
+  is_partial?: boolean;
+  partial_area?: number;
   products: ApplicationProductInput[];
 }
 
@@ -95,6 +104,7 @@ interface ApplicationProductInput {
   dosage: number;
   dosage_unit: string;
   quantity_used: number;
+  cost?: number;
 }
 
 interface UpdateApplicationInput extends Partial<CreateApplicationInput> {
@@ -198,19 +208,261 @@ async function fetchFieldCrops(fieldId: string, harvestYearId: string): Promise<
   return data || [];
 }
 
-// Função para buscar sub-talhões
-async function fetchSubFields(fieldId: string): Promise<SubField[]> {
-  const { data, error } = await supabase
-    .from("sub_fields")
+// Função para buscar maquinários (apenas pulverizadores)
+async function fetchMachineries(): Promise<Machinery[]> {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  // Buscar maquinários - permitir sem autenticação (user_id pode ser null)
+  const query = supabase
+    .from("machineries")
     .select("*")
-    .eq("field_id", fieldId)
+    .eq("type", "pulverizador")
     .order("name", { ascending: true });
 
+  // Se houver usuário autenticado, filtrar por user_id, senão buscar todos
+  if (user) {
+    query.eq("user_id", user.id);
+  } else {
+    query.is("user_id", null);
+  }
+
+  const { data, error } = await query;
+
   if (error) {
-    throw new Error(`Erro ao buscar sub-talhões: ${error.message}`);
+    throw new Error(`Erro ao buscar maquinários: ${error.message}`);
   }
 
   return data || [];
+}
+
+// Função para buscar receitas práticas de uma aplicação
+async function fetchPracticalRecipes(applicationId: string): Promise<PracticalRecipe[]> {
+  const { data, error } = await supabase
+    .from("practical_recipes")
+    .select(`
+      *,
+      practical_recipe_products:practical_recipe_products(*)
+    `)
+    .eq("application_id", applicationId)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    throw new Error(`Erro ao buscar receitas práticas: ${error.message}`);
+  }
+
+  return data || [];
+}
+
+// Função para criar receita prática
+async function createPracticalRecipe(
+  applicationId: string,
+  machineryId: string,
+  capacityUsedPercent: number,
+  applicationRate: number,
+  litersOfSolution: number | null,
+  areaHectares: number | null,
+  multiplier: number,
+  products: Array<{
+    product_id: string;
+    dosage: number;
+    quantity_in_recipe: number;
+    remaining_quantity: number;
+  }>
+): Promise<PracticalRecipe> {
+  // Obter usuário atual (se houver)
+  const { data: { user } } = await supabase.auth.getUser();
+  const createdBy = user?.id || null;
+
+  // Criar a receita prática
+  const { data: recipe, error: recipeError } = await supabase
+    .from("practical_recipes")
+    .insert({
+      application_id: applicationId,
+      machinery_id: machineryId,
+      capacity_used_percent: capacityUsedPercent,
+      application_rate_liters_per_hectare: applicationRate,
+      liters_of_solution: litersOfSolution,
+      area_hectares: areaHectares,
+      multiplier: multiplier,
+      created_by: createdBy,
+    })
+    .select()
+    .single();
+
+  if (recipeError || !recipe) {
+    throw new Error(`Erro ao criar receita prática: ${recipeError?.message || "Receita não foi criada"}`);
+  }
+
+  // Criar os produtos da receita
+  if (products && products.length > 0) {
+    const recipeProducts = products.map((product) => ({
+      practical_recipe_id: recipe.id,
+      product_id: product.product_id,
+      dosage: product.dosage,
+      quantity_in_recipe: product.quantity_in_recipe,
+      remaining_quantity: product.remaining_quantity,
+    }));
+
+    const { error: productsError } = await supabase
+      .from("practical_recipe_products")
+      .insert(recipeProducts);
+
+    if (productsError) {
+      // Rollback: deletar a receita se houver erro ao inserir produtos
+      await supabase.from("practical_recipes").delete().eq("id", recipe.id);
+      throw new Error(`Erro ao criar produtos da receita: ${productsError.message}`);
+    }
+  }
+
+  // Buscar receita completa com produtos
+  const { data: fullRecipe, error: fetchError } = await supabase
+    .from("practical_recipes")
+    .select(`
+      *,
+      practical_recipe_products:practical_recipe_products(*)
+    `)
+    .eq("id", recipe.id)
+    .single();
+
+  if (fetchError || !fullRecipe) {
+    return recipe as PracticalRecipe;
+  }
+
+  return fullRecipe as PracticalRecipe;
+}
+
+// Função para atualizar receita prática
+async function updatePracticalRecipe(
+  recipeId: string,
+  machineryId: string,
+  capacityUsedPercent: number,
+  applicationRate: number,
+  litersOfSolution: number | null,
+  areaHectares: number | null,
+  multiplier: number,
+  products: Array<{
+    product_id: string;
+    dosage: number;
+    quantity_in_recipe: number;
+    remaining_quantity: number;
+  }>
+): Promise<PracticalRecipe> {
+  // Atualizar a receita prática
+  const { data: updatedRecipe, error: recipeError } = await supabase
+    .from("practical_recipes")
+    .update({
+      machinery_id: machineryId,
+      capacity_used_percent: capacityUsedPercent,
+      application_rate_liters_per_hectare: applicationRate,
+      liters_of_solution: litersOfSolution,
+      area_hectares: areaHectares,
+      multiplier: multiplier,
+    })
+    .eq("id", recipeId)
+    .select()
+    .single();
+
+  if (recipeError || !updatedRecipe) {
+    throw new Error(`Erro ao atualizar receita prática: ${recipeError?.message || "Receita não foi atualizada"}`);
+  }
+
+  // Deletar produtos antigos
+  const { error: deleteError } = await supabase
+    .from("practical_recipe_products")
+    .delete()
+    .eq("practical_recipe_id", recipeId);
+
+  if (deleteError) {
+    throw new Error(`Erro ao deletar produtos antigos: ${deleteError.message}`);
+  }
+
+  // Inserir novos produtos
+  if (products && products.length > 0) {
+    const recipeProducts = products.map((product) => ({
+      practical_recipe_id: recipeId,
+      product_id: product.product_id,
+      dosage: product.dosage,
+      quantity_in_recipe: product.quantity_in_recipe,
+      remaining_quantity: product.remaining_quantity,
+    }));
+
+    const { error: productsError } = await supabase
+      .from("practical_recipe_products")
+      .insert(recipeProducts);
+
+    if (productsError) {
+      throw new Error(`Erro ao atualizar produtos da receita: ${productsError.message}`);
+    }
+  }
+
+  // Buscar receita completa com produtos
+  const { data: fullRecipe, error: fetchError } = await supabase
+    .from("practical_recipes")
+    .select(`
+      *,
+      practical_recipe_products:practical_recipe_products(*)
+    `)
+    .eq("id", recipeId)
+    .single();
+
+  if (fetchError || !fullRecipe) {
+    return updatedRecipe as PracticalRecipe;
+  }
+
+  return fullRecipe as PracticalRecipe;
+}
+
+// Função para deletar receita prática
+async function deletePracticalRecipe(recipeId: string): Promise<void> {
+  // Deletar produtos primeiro (devido à foreign key)
+  const { error: productsError } = await supabase
+    .from("practical_recipe_products")
+    .delete()
+    .eq("practical_recipe_id", recipeId);
+
+  if (productsError) {
+    throw new Error(`Erro ao deletar produtos da receita: ${productsError.message}`);
+  }
+
+  // Deletar a receita
+  const { error: recipeError } = await supabase
+    .from("practical_recipes")
+    .delete()
+    .eq("id", recipeId);
+
+  if (recipeError) {
+    throw new Error(`Erro ao deletar receita prática: ${recipeError.message}`);
+  }
+}
+
+// Função para buscar preço médio de um produto
+async function getProductAveragePrice(productId: string): Promise<number> {
+  const { data: movements, error } = await supabase
+    .from("stock_movements")
+    .select("quantity, unit_price, movement_type")
+    .eq("product_id", productId);
+
+  if (error) {
+    console.error("Erro ao buscar movimentações:", error);
+    return 0;
+  }
+
+  let totalValue = 0;
+  let totalQuantity = 0;
+
+  movements?.forEach((movement) => {
+    // Apenas entradas contam para o preço médio
+    if (movement.movement_type === "entry" || (movement.movement_type as string) === "IN") {
+      const quantity = movement.quantity || 0;
+      const unitPrice = movement.unit_price || 0;
+      totalValue += quantity * unitPrice;
+      totalQuantity += quantity;
+    }
+  });
+
+  return totalQuantity > 0 ? totalValue / totalQuantity : 0;
 }
 
 // Função para criar aplicação
@@ -236,11 +488,15 @@ async function createApplication(data: CreateApplicationInput): Promise<Applicat
   const { data: newApplication, error: appError } = await supabase
     .from("applications")
     .insert({
+      name: data.name,
       harvest_year_id: data.harvest_year_id,
       field_id: data.field_id,
+      field_crop_id: data.field_crop_id || null,
       application_date: data.application_date,
       status: statusValue,
       notes: data.notes || null,
+      is_partial: data.is_partial || false,
+      partial_area: data.partial_area || null,
     } as any)
     .select()
     .single();
@@ -467,12 +723,16 @@ async function updateApplication(data: UpdateApplicationInput): Promise<Applicat
   }
 
   const updatePayload: Record<string, any> = {};
+  if (updateData.name !== undefined) updatePayload.name = updateData.name;
   if (updateData.harvest_year_id !== undefined) updatePayload.harvest_year_id = updateData.harvest_year_id;
   if (updateData.field_id !== undefined) updatePayload.field_id = updateData.field_id;
+  if (updateData.field_crop_id !== undefined) updatePayload.field_crop_id = updateData.field_crop_id || null;
   if (updateData.application_date !== undefined)
     updatePayload.application_date = updateData.application_date;
   if (statusValue !== undefined) updatePayload.status = statusValue;
   if (updateData.notes !== undefined) updatePayload.notes = updateData.notes || null;
+  if (updateData.is_partial !== undefined) updatePayload.is_partial = updateData.is_partial;
+  if (updateData.partial_area !== undefined) updatePayload.partial_area = updateData.partial_area || null;
   updatePayload.updated_at = new Date().toISOString();
 
   // 1. Atualizar aplicação
@@ -524,21 +784,9 @@ async function updateApplication(data: UpdateApplicationInput): Promise<Applicat
         notes: `Saída por aplicação ${id}`,
       }));
 
-      // #region agent log
-      try {
-        fetch('http://127.0.0.1:7242/ingest/df53d563-b320-4db6-8da2-ea422df09482',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'aplicacoes/page.tsx:516',message:'updateApplication before stock movements insert',data:{exitMovementsCount:exitMovements.length,hasReferenceId:exitMovements[0]?.reference_id,hasReferenceType:exitMovements[0]?.reference_type},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-      } catch (e) {}
-      // #endregion
-
       const { error: movementsError } = await supabase
         .from("stock_movements")
         .insert(exitMovements as any);
-
-      // #region agent log
-      try {
-        fetch('http://127.0.0.1:7242/ingest/df53d563-b320-4db6-8da2-ea422df09482',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'aplicacoes/page.tsx:530',message:'updateApplication stock movements insert result',data:{error:movementsError?.message,errorCode:movementsError?.code,errorDetails:movementsError?.details},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-      } catch (e) {}
-      // #endregion
 
       if (movementsError) {
         // Rollback: reverter status da aplicação
@@ -620,7 +868,20 @@ function formatDateForInput(dateString: string): string {
 export default function AplicacoesPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingApplication, setEditingApplication] = useState<Application | null>(null);
+  const [isRecipeDialogOpen, setIsRecipeDialogOpen] = useState(false);
+  const [recipeApplication, setRecipeApplication] = useState<Application | null>(null);
+  const [isViewRecipesDialogOpen, setIsViewRecipesDialogOpen] = useState(false);
+  const [viewRecipesApplication, setViewRecipesApplication] = useState<Application | null>(null);
+  const [isFiltersDialogOpen, setIsFiltersDialogOpen] = useState(false);
+  const [filters, setFilters] = useState<{
+    name?: string;
+    date?: string;
+    fieldIds?: string[];
+    harvestYearIds?: string[];
+    statuses?: string[];
+  }>({});
   const queryClient = useQueryClient();
+  const router = useRouter();
 
   // Queries
   const { data: applications = [], isLoading, error: fetchError } = useQuery({
@@ -686,11 +947,12 @@ export default function AplicacoesPage() {
   const form = useForm<ApplicationFormValues>({
     resolver: zodResolver(applicationSchema),
     defaultValues: {
+      name: "",
       harvest_year_id: "",
       field_id: "",
       field_crop_id: "",
       is_partial: false,
-      sub_field_ids: [],
+      partial_area: undefined,
       application_date: "",
       status: "planned",
       notes: "",
@@ -709,15 +971,45 @@ export default function AplicacoesPage() {
     enabled: !!selectedFieldId && !!selectedHarvestYearId,
   });
 
-  const { data: subFields = [] } = useQuery({
-    queryKey: ["sub_fields", selectedFieldId],
-    queryFn: () => fetchSubFields(selectedFieldId),
-    enabled: !!selectedFieldId && !!isPartial,
-  });
-
   const { fields: productFields, append, remove } = useFieldArray({
     control: form.control,
     name: "products",
+  });
+
+  // Estado local para armazenar valores de dosagem como string durante a digitação
+  const [dosageInputs, setDosageInputs] = useState<Record<number, string>>({});
+
+  // Estados para receita prática (criação)
+  const [selectedMachineryId, setSelectedMachineryId] = useState<string>("");
+  const [capacityUsedPercent, setCapacityUsedPercent] = useState<number>(100);
+  const [applicationRate, setApplicationRate] = useState<number>(0);
+  const [calculationMode, setCalculationMode] = useState<"liters" | "area">("liters");
+  const [litersOfSolution, setLitersOfSolution] = useState<number>(0);
+  const [areaHectares, setAreaHectares] = useState<number>(0);
+  const [multiplier, setMultiplier] = useState<number>(1);
+
+  // Estados para edição de receita prática
+  const [isEditRecipeDialogOpen, setIsEditRecipeDialogOpen] = useState(false);
+  const [editingRecipe, setEditingRecipe] = useState<PracticalRecipe | null>(null);
+  const [editSelectedMachineryId, setEditSelectedMachineryId] = useState<string>("");
+  const [editCapacityUsedPercent, setEditCapacityUsedPercent] = useState<number>(100);
+  const [editApplicationRate, setEditApplicationRate] = useState<number>(0);
+  const [editCalculationMode, setEditCalculationMode] = useState<"liters" | "area">("liters");
+  const [editLitersOfSolution, setEditLitersOfSolution] = useState<number>(0);
+  const [editAreaHectares, setEditAreaHectares] = useState<number>(0);
+  const [editMultiplier, setEditMultiplier] = useState<number>(1);
+
+  // Query para buscar maquinários - sempre habilitada para garantir que os dados estejam disponíveis
+  const { data: machineries = [] } = useQuery({
+    queryKey: ["machineries"],
+    queryFn: fetchMachineries,
+  });
+
+  // Query para buscar receitas práticas existentes
+  const { data: existingRecipes = [] } = useQuery({
+    queryKey: ["practical_recipes", recipeApplication?.id],
+    queryFn: () => fetchPracticalRecipes(recipeApplication!.id),
+    enabled: !!recipeApplication && isRecipeDialogOpen,
   });
 
   const onSubmit = (data: ApplicationFormValues) => {
@@ -743,11 +1035,16 @@ export default function AplicacoesPage() {
       dosage: ap.dosage,
       dosage_unit: "L/ha" as const, // Default, pode ser ajustado se houver no banco
       quantity_used: ap.quantity_used,
+      cost: 0, // Será calculado automaticamente se necessário
     }));
 
     form.reset({
+      name: application.name || "",
       harvest_year_id: application.harvest_year_id,
       field_id: application.field_id,
+      field_crop_id: (application as any).field_crop_id || "",
+      is_partial: (application as any).is_partial || false,
+      partial_area: (application as any).partial_area || undefined,
       application_date: formatDateForInput(application.application_date),
       status: statusValue as any,
       notes: application.notes || "",
@@ -762,32 +1059,279 @@ export default function AplicacoesPage() {
     }
   };
 
+  const handleGenerateRecipe = (application: Application) => {
+    setRecipeApplication(application);
+    setIsRecipeDialogOpen(true);
+  };
+
+  const handleMarkAsDone = async (application: Application) => {
+    if (confirm("Tem certeza que deseja marcar esta aplicação como realizada?")) {
+      updateMutation.mutate({
+        id: application.id,
+        status: "DONE",
+      });
+    }
+  };
+
+  const handleViewRecipes = (application: Application) => {
+    setViewRecipesApplication(application);
+    setIsViewRecipesDialogOpen(true);
+  };
+
+  // Query para buscar receitas práticas da aplicação selecionada
+  const { data: practicalRecipes = [] } = useQuery({
+    queryKey: ["practical_recipes", viewRecipesApplication?.id],
+    queryFn: () => fetchPracticalRecipes(viewRecipesApplication!.id),
+    enabled: !!viewRecipesApplication?.id,
+  });
+
+  // Função para calcular área restante
+  const calculateRemainingArea = (application: Application, recipes: PracticalRecipe[]): number => {
+    const totalArea = application.is_partial && application.partial_area 
+      ? application.partial_area 
+      : ((application.field as Field)?.area_hectares || 0);
+    
+    const usedArea = recipes.reduce((sum, recipe) => {
+      return sum + (recipe.area_hectares || 0) * (recipe.multiplier || 1);
+    }, 0);
+    
+    return Math.max(0, totalArea - usedArea);
+  };
+
+  // Função para filtrar aplicações
+  const filterApplications = (apps: Application[]): Application[] => {
+    return apps.filter((app) => {
+      // Filtro por nome
+      if (filters.name && filters.name.trim() !== "") {
+        const nameMatch = app.name?.toLowerCase().includes(filters.name.toLowerCase());
+        if (!nameMatch) return false;
+      }
+
+      // Filtro por data
+      if (filters.date) {
+        const appDate = formatDateForInput(app.application_date);
+        if (appDate !== filters.date) return false;
+      }
+
+      // Filtro por talhão
+      if (filters.fieldIds && filters.fieldIds.length > 0) {
+        if (!filters.fieldIds.includes(app.field_id)) return false;
+      }
+
+      // Filtro por safra
+      if (filters.harvestYearIds && filters.harvestYearIds.length > 0) {
+        if (!filters.harvestYearIds.includes(app.harvest_year_id)) return false;
+      }
+
+      // Filtro por status
+      if (filters.statuses && filters.statuses.length > 0) {
+        const appStatus = app.status as string;
+        const normalizedStatus = appStatus === "PLANNED" || appStatus === "planned" ? "planned"
+          : appStatus === "DONE" || appStatus === "completed" || appStatus === "done" ? "completed"
+          : "cancelled";
+        if (!filters.statuses.includes(normalizedStatus)) return false;
+      }
+
+      return true;
+    });
+  };
+
+  // Aplicar filtros
+  const filteredApplications = filterApplications(applications);
+
+  // Handler para editar receita prática
+  const handleEditRecipe = (recipe: PracticalRecipe) => {
+    setEditingRecipe(recipe);
+    setEditSelectedMachineryId(recipe.machinery_id);
+    setEditCapacityUsedPercent(recipe.capacity_used_percent);
+    setEditApplicationRate(recipe.application_rate_liters_per_hectare);
+    setEditCalculationMode(recipe.liters_of_solution ? "liters" : "area");
+    setEditLitersOfSolution(recipe.liters_of_solution || 0);
+    setEditAreaHectares(recipe.area_hectares || 0);
+    setEditMultiplier(recipe.multiplier || 1);
+    setIsEditRecipeDialogOpen(true);
+  };
+
+  // Handler para excluir receita prática
+  const handleDeleteRecipe = async (recipeId: string) => {
+    if (confirm("Tem certeza que deseja excluir esta receita prática?")) {
+      try {
+        await deletePracticalRecipe(recipeId);
+        queryClient.invalidateQueries({ queryKey: ["practical_recipes"] });
+        if (viewRecipesApplication) {
+          queryClient.invalidateQueries({ queryKey: ["practical_recipes", viewRecipesApplication.id] });
+        }
+      } catch (error: any) {
+        alert(`Erro ao excluir receita prática: ${error.message}`);
+      }
+    }
+  };
+
+  // Mutation para atualizar receita prática
+  const updateRecipeMutation = useMutation({
+    mutationFn: ({
+      recipeId,
+      machineryId,
+      capacityUsedPercent,
+      applicationRate,
+      litersOfSolution,
+      areaHectares,
+      multiplier,
+      products,
+    }: {
+      recipeId: string;
+      machineryId: string;
+      capacityUsedPercent: number;
+      applicationRate: number;
+      litersOfSolution: number | null;
+      areaHectares: number | null;
+      multiplier: number;
+      products: Array<{
+        product_id: string;
+        dosage: number;
+        quantity_in_recipe: number;
+        remaining_quantity: number;
+      }>;
+    }) => updatePracticalRecipe(recipeId, machineryId, capacityUsedPercent, applicationRate, litersOfSolution, areaHectares, multiplier, products),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["practical_recipes"] });
+      if (viewRecipesApplication) {
+        queryClient.invalidateQueries({ queryKey: ["practical_recipes", viewRecipesApplication.id] });
+      }
+      setIsEditRecipeDialogOpen(false);
+      setEditingRecipe(null);
+    },
+    onError: (error: Error) => {
+      alert(`Erro ao atualizar receita prática: ${error.message}`);
+    },
+  });
+
   const handleOpenChange = (open: boolean) => {
     setIsDialogOpen(open);
     if (!open) {
       setEditingApplication(null);
-      form.reset();
+      // Limpar estado local de dosagem
+      setDosageInputs({});
+      // Resetar formulário para valores padrão vazios
+      form.reset({
+        harvest_year_id: "",
+        field_id: "",
+        field_crop_id: "",
+        is_partial: false,
+        partial_area: undefined,
+        application_date: "",
+        status: "planned",
+        notes: "",
+        products: [],
+      });
+    } else {
+      // Quando abrir o dialog, garantir que está vazio se não for edição
+      if (!editingApplication) {
+        // Limpar estado local de dosagem
+        setDosageInputs({});
+        form.reset({
+          harvest_year_id: "",
+          field_id: "",
+          field_crop_id: "",
+          is_partial: false,
+          partial_area: undefined,
+          application_date: "",
+          status: "planned",
+          notes: "",
+          products: [],
+        });
+      }
     }
   };
 
   const addProduct = () => {
+    const newIndex = productFields.length;
     append({
       product_id: "",
       dosage: 0,
       dosage_unit: "L/ha",
       quantity_used: 0,
+      cost: undefined,
+    });
+    // Limpar estado local de dosagem para o novo produto
+    setDosageInputs(prev => {
+      const newState = { ...prev };
+      delete newState[newIndex];
+      return newState;
     });
   };
 
-  // Função para calcular quantidade total baseada na área do talhão
-  const calculateQuantity = (fieldId: string, dosage: number, index: number) => {
+  // Função para obter a área efetiva (talhão ou área parcial)
+  const getEffectiveArea = (fieldId: string): number => {
     const field = fields.find((f) => f.id === fieldId);
-    if (field && dosage > 0) {
-      const area = (field as any).area_hct ?? field.area_hectares ?? 0;
-      const quantity = dosage * area;
-      form.setValue(`products.${index}.quantity_used`, quantity);
+    if (!field) return 0;
+
+    const isPartial = form.watch("is_partial");
+    const partialArea = form.watch("partial_area");
+
+    let area = (field as any).area_hct ?? field.area_hectares ?? 0;
+
+    // Se for aplicação parcial e houver área parcial definida, usar essa área
+    if (isPartial && partialArea && partialArea > 0) {
+      area = partialArea;
+    }
+
+    return area;
+  };
+
+  // Função para calcular quantidade total baseada na área do talhão ou área parcial
+  const calculateQuantity = async (fieldId: string, dosage: number, index: number) => {
+    if (dosage <= 0) return;
+    const area = getEffectiveArea(fieldId);
+    if (area <= 0) return;
+    
+    const quantity = formatToTwoDecimals(dosage * area);
+    form.setValue(`products.${index}.quantity_used`, quantity);
+    
+    // Recalcular custo após calcular quantidade
+    const productId = form.watch(`products.${index}.product_id`);
+    if (productId && quantity > 0) {
+      await calculateCost(productId, quantity, index);
     }
   };
+
+  // Função para calcular dosagem baseada na quantidade
+  const calculateDosage = async (fieldId: string, quantity: number, index: number) => {
+    if (quantity <= 0) return;
+    const area = getEffectiveArea(fieldId);
+    if (area <= 0) return;
+    
+    const dosage = formatToTwoDecimals(quantity / area);
+    form.setValue(`products.${index}.dosage`, dosage);
+    
+    // Recalcular custo após calcular dosagem
+    const productId = form.watch(`products.${index}.product_id`);
+    if (productId && quantity > 0) {
+      await calculateCost(productId, quantity, index);
+    }
+  };
+
+  // Função para formatar número com máximo 2 casas decimais
+  const formatToTwoDecimals = (value: number): number => {
+    return Math.round(value * 100) / 100;
+  };
+
+  // Função para calcular custo baseado na quantidade e preço médio
+  const calculateCost = async (productId: string, quantity: number, index: number) => {
+    if (!productId || quantity <= 0) {
+      form.setValue(`products.${index}.cost`, 0);
+      return;
+    }
+    
+    const averagePrice = await getProductAveragePrice(productId);
+    if (averagePrice > 0) {
+      const cost = formatToTwoDecimals(quantity * averagePrice);
+      form.setValue(`products.${index}.cost`, cost);
+    } else {
+      form.setValue(`products.${index}.cost`, 0);
+    }
+  };
+
 
   return (
     <div className="space-y-6">
@@ -821,6 +1365,25 @@ export default function AplicacoesPage() {
                 {/* Cabeçalho */}
                 <div className="space-y-4">
                   <h3 className="text-lg font-semibold">Informações Gerais</h3>
+                  
+                  {/* Nome da Aplicação */}
+                  <FormField
+                    control={form.control}
+                    name="name"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Nome da Aplicação</FormLabel>
+                        <FormControl>
+                          <Input
+                            placeholder="Ex: Aplicação de Herbicida - Soja"
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
                   <div className="grid grid-cols-2 gap-4">
                     <FormField
                       control={form.control}
@@ -907,76 +1470,86 @@ export default function AplicacoesPage() {
 
                   {/* Aplicação Parcial */}
                   {selectedFieldId && (
-                    <FormField
-                      control={form.control}
-                      name="is_partial"
-                      render={({ field }) => (
-                        <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4">
-                          <FormControl>
-                            <Checkbox
-                              checked={field.value}
-                              onCheckedChange={field.onChange}
-                            />
-                          </FormControl>
-                          <div className="space-y-1 leading-none">
-                            <FormLabel>Aplicação Parcial?</FormLabel>
-                            <p className="text-sm text-muted-foreground">
-                              Marque se a aplicação será apenas em sub-talhões específicos
-                            </p>
-                          </div>
-                        </FormItem>
+                    <>
+                      <FormField
+                        control={form.control}
+                        name="is_partial"
+                        render={({ field }) => (
+                          <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4">
+                            <FormControl>
+                              <Checkbox
+                                checked={field.value}
+                                onCheckedChange={(checked) => {
+                                  field.onChange(checked);
+                                  // Se desmarcar, limpar área parcial
+                                  if (!checked) {
+                                    form.setValue("partial_area", undefined);
+                                  }
+                                }}
+                              />
+                            </FormControl>
+                            <div className="space-y-1 leading-none">
+                              <FormLabel>Aplicação Parcial?</FormLabel>
+                              <p className="text-sm text-muted-foreground">
+                                Marque se a aplicação será em uma área parcial do talhão
+                              </p>
+                            </div>
+                          </FormItem>
+                        )}
+                      />
+                      {/* Campo de Área Parcial - aparece apenas se aplicação parcial estiver marcada */}
+                      {isPartial && (
+                        <FormField
+                          control={form.control}
+                          name="partial_area"
+                          render={({ field }) => {
+                            const selectedField = fields.find((f) => f.id === selectedFieldId);
+                            const maxArea = selectedField 
+                              ? ((selectedField as any).area_hct ?? selectedField.area_hectares ?? 0)
+                              : 0;
+                            
+                            return (
+                              <FormItem>
+                                <FormLabel>Área a Aplicar (ha)</FormLabel>
+                                <FormControl>
+                                  <Input
+                                    type="number"
+                                    step="0.01"
+                                    min="0"
+                                    max={maxArea}
+                                    placeholder="0.00"
+                                    value={field.value || ""}
+                                    onChange={(e) => {
+                                      const value = parseFloat(e.target.value);
+                                      if (!isNaN(value)) {
+                                        // Validar que não excede área total
+                                        if (value > maxArea) {
+                                          form.setError("partial_area", {
+                                            type: "manual",
+                                            message: `A área não pode ser maior que a área total do talhão (${maxArea.toFixed(2)} ha)`,
+                                          });
+                                        } else {
+                                          form.clearErrors("partial_area");
+                                          // Arredondar para 2 casas decimais
+                                          field.onChange(Math.round(value * 100) / 100);
+                                        }
+                                      } else {
+                                        field.onChange(undefined);
+                                      }
+                                    }}
+                                    onBlur={field.onBlur}
+                                  />
+                                </FormControl>
+                                <FormDescription>
+                                  Área máxima: {maxArea.toFixed(2)} ha
+                                </FormDescription>
+                                <FormMessage />
+                              </FormItem>
+                            );
+                          }}
+                        />
                       )}
-                    />
-                  )}
-
-                  {/* Sub-talhões (aparece apenas se aplicação parcial estiver marcada) */}
-                  {isPartial && subFields.length > 0 && (
-                    <FormField
-                      control={form.control}
-                      name="sub_field_ids"
-                      render={() => (
-                        <FormItem>
-                          <div className="mb-4">
-                            <FormLabel className="text-base">Sub-talhões</FormLabel>
-                            <p className="text-sm text-muted-foreground">
-                              Selecione os sub-talhões onde a aplicação será realizada
-                            </p>
-                          </div>
-                          {subFields.map((subField) => (
-                            <FormField
-                              key={subField.id}
-                              control={form.control}
-                              name="sub_field_ids"
-                              render={({ field }) => {
-                                return (
-                                  <FormItem
-                                    key={subField.id}
-                                    className="flex flex-row items-start space-x-3 space-y-0"
-                                  >
-                                    <FormControl>
-                                      <Checkbox
-                                        checked={field.value?.includes(subField.id)}
-                                        onCheckedChange={(checked) => {
-                                          return checked
-                                            ? field.onChange([...(field.value || []), subField.id])
-                                            : field.onChange(
-                                                field.value?.filter((value) => value !== subField.id)
-                                              );
-                                        }}
-                                      />
-                                    </FormControl>
-                                    <FormLabel className="font-normal">
-                                      {subField.name} ({subField.area_hectares.toFixed(1)} ha)
-                                    </FormLabel>
-                                  </FormItem>
-                                );
-                              }}
-                            />
-                          ))}
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
+                    </>
                   )}
 
                   <div className="grid grid-cols-2 gap-4">
@@ -1059,9 +1632,19 @@ export default function AplicacoesPage() {
                                 control={form.control}
                                 name={`products.${index}.product_id`}
                                 render={({ field }) => (
-                                  <FormItem className="col-span-4">
+                                  <FormItem className="col-span-3">
                                     <FormLabel>Produto</FormLabel>
-                                    <Select onValueChange={field.onChange} value={field.value}>
+                                    <Select 
+                                      onValueChange={async (value) => {
+                                        field.onChange(value);
+                                        // Quando produto é selecionado, calcular custo se houver quantidade
+                                        const quantity = form.watch(`products.${index}.quantity_used`);
+                                        if (value && quantity > 0) {
+                                          await calculateCost(value, quantity, index);
+                                        }
+                                      }} 
+                                      value={field.value}
+                                    >
                                       <FormControl>
                                         <SelectTrigger>
                                           <SelectValue placeholder="Selecione" />
@@ -1082,30 +1665,92 @@ export default function AplicacoesPage() {
                               <FormField
                                 control={form.control}
                                 name={`products.${index}.dosage`}
-                                render={({ field }) => (
-                                  <FormItem className="col-span-2">
-                                    <FormLabel>Dosagem</FormLabel>
-                                    <FormControl>
-                                      <Input
-                                        type="number"
-                                        step="0.01"
-                                        placeholder="0.5"
-                                        value={field.value || ""}
-                                        onChange={(e) => {
-                                          const value = parseFloat(e.target.value);
-                                          field.onChange(isNaN(value) ? 0 : value);
-                                          // Calcula quantidade automaticamente
-                                          const fieldId = form.watch("field_id");
-                                          if (fieldId && value > 0) {
-                                            calculateQuantity(fieldId, value, index);
-                                          }
-                                        }}
-                                        onBlur={field.onBlur}
-                                      />
-                                    </FormControl>
-                                    <FormMessage />
-                                  </FormItem>
-                                )}
+                                render={({ field }) => {
+                                  // Usar estado local se existir, senão usar valor do form
+                                  const localValue = dosageInputs[index] !== undefined 
+                                    ? dosageInputs[index]
+                                    : (field.value !== undefined && field.value !== null && field.value !== 0
+                                        ? field.value.toString().replace('.', ',')
+                                        : "");
+                                  
+                                  return (
+                                    <FormItem className="col-span-2">
+                                      <FormLabel>Dosagem</FormLabel>
+                                      <FormControl>
+                                        <Input
+                                          type="text"
+                                          inputMode="decimal"
+                                          placeholder="0.5"
+                                          value={localValue}
+                                          onChange={(e) => {
+                                            let inputValue = e.target.value;
+                                            // Permitir apenas números, vírgula e ponto
+                                            inputValue = inputValue.replace(/[^0-9,.]/g, '');
+                                            
+                                            // Atualizar estado local imediatamente para permitir digitação livre
+                                            setDosageInputs(prev => ({ ...prev, [index]: inputValue }));
+                                            
+                                            // Se campo estiver vazio, limpar estado local e form
+                                            if (inputValue === "") {
+                                              setDosageInputs(prev => {
+                                                const newState = { ...prev };
+                                                delete newState[index];
+                                                return newState;
+                                              });
+                                              field.onChange(0);
+                                              return;
+                                            }
+                                            
+                                            // Substituir vírgula por ponto para processamento
+                                            const normalizedValue = inputValue.replace(',', '.');
+                                            
+                                            // Se o valor é apenas "0." ou "0,", manter como string e não converter ainda
+                                            if (normalizedValue === "0." || normalizedValue === "0," || normalizedValue === "0") {
+                                              // Não converter para número ainda, deixar o usuário continuar digitando
+                                              return;
+                                            }
+                                            
+                                            const value = parseFloat(normalizedValue);
+                                            
+                                            if (!isNaN(value) && value >= 0) {
+                                              // Limitar a 2 casas decimais
+                                              const formattedValue = formatToTwoDecimals(value);
+                                              field.onChange(formattedValue);
+                                              // Atualizar estado local com valor formatado
+                                              setDosageInputs(prev => ({ ...prev, [index]: formattedValue.toString().replace('.', ',') }));
+                                              // Calcula quantidade automaticamente
+                                              const fieldId = form.watch("field_id");
+                                              if (fieldId && formattedValue > 0) {
+                                                calculateQuantity(fieldId, formattedValue, index);
+                                              }
+                                            }
+                                          }}
+                                          onBlur={(e) => {
+                                            // Garantir que ao sair do campo, o valor está formatado
+                                            const normalizedValue = e.target.value.replace(',', '.');
+                                            const value = parseFloat(normalizedValue);
+                                            if (!isNaN(value) && value >= 0) {
+                                              const formattedValue = formatToTwoDecimals(value);
+                                              field.onChange(formattedValue);
+                                              // Atualizar estado local com valor formatado
+                                              setDosageInputs(prev => ({ ...prev, [index]: formattedValue.toString().replace('.', ',') }));
+                                            } else {
+                                              field.onChange(0);
+                                              // Limpar estado local
+                                              setDosageInputs(prev => {
+                                                const newState = { ...prev };
+                                                delete newState[index];
+                                                return newState;
+                                              });
+                                            }
+                                            field.onBlur();
+                                          }}
+                                        />
+                                      </FormControl>
+                                      <FormMessage />
+                                    </FormItem>
+                                  );
+                                }}
                               />
                               <FormField
                                 control={form.control}
@@ -1133,21 +1778,81 @@ export default function AplicacoesPage() {
                                 control={form.control}
                                 name={`products.${index}.quantity_used`}
                                 render={({ field }) => (
-                                  <FormItem className="col-span-3">
+                                  <FormItem className="col-span-2">
                                     <FormLabel>Quantidade Total</FormLabel>
                                     <FormControl>
                                       <Input
-                                        type="number"
-                                        step="0.01"
+                                        type="text"
+                                        inputMode="decimal"
                                         placeholder="0.00"
-                                        value={field.value || ""}
-                                        onChange={(e) => {
-                                          const value = parseFloat(e.target.value);
-                                          field.onChange(isNaN(value) ? 0 : value);
+                                        value={(() => {
+                                          const val = field.value;
+                                          if (val === undefined || val === null) return "";
+                                          if (val === 0) return "";
+                                          return val.toString().replace('.', ',');
+                                        })()}
+                                        onChange={async (e) => {
+                                          let inputValue = e.target.value;
+                                          // Permitir apenas números, vírgula e ponto
+                                          inputValue = inputValue.replace(/[^0-9,.]/g, '');
+                                          
+                                          // Se campo estiver vazio, permitir
+                                          if (inputValue === "") {
+                                            field.onChange(0);
+                                            return;
+                                          }
+                                          
+                                          const normalizedValue = inputValue.replace(',', '.');
+                                          const value = parseFloat(normalizedValue);
+                                          if (!isNaN(value) && value >= 0) {
+                                            const formattedValue = formatToTwoDecimals(value);
+                                            field.onChange(formattedValue);
+                                            // Calcula dosagem automaticamente quando quantidade muda
+                                            const fieldId = form.watch("field_id");
+                                            const productId = form.watch(`products.${index}.product_id`);
+                                            if (fieldId && formattedValue > 0) {
+                                              await calculateDosage(fieldId, formattedValue, index);
+                                            } else if (productId && formattedValue > 0) {
+                                              await calculateCost(productId, formattedValue, index);
+                                            }
+                                          }
                                         }}
-                                        onBlur={field.onBlur}
+                                        onBlur={(e) => {
+                                          const normalizedValue = e.target.value.replace(',', '.');
+                                          const value = parseFloat(normalizedValue);
+                                          if (!isNaN(value) && value >= 0) {
+                                            field.onChange(formatToTwoDecimals(value));
+                                          } else {
+                                            field.onChange(0);
+                                          }
+                                          field.onBlur();
+                                        }}
                                       />
                                     </FormControl>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+                              <FormField
+                                control={form.control}
+                                name={`products.${index}.cost`}
+                                render={({ field }) => (
+                                  <FormItem className="col-span-2">
+                                    <FormLabel>Custo (R$)</FormLabel>
+                                    <FormControl>
+                                      <Input
+                                        type="text"
+                                        placeholder="0.00"
+                                        readOnly
+                                        value={field.value !== undefined && field.value !== null 
+                                          ? formatToTwoDecimals(field.value).toFixed(2).replace('.', ',')
+                                          : "0,00"}
+                                        className="bg-muted cursor-not-allowed"
+                                      />
+                                    </FormControl>
+                                    <FormDescription className="text-xs">
+                                      Calculado automaticamente
+                                    </FormDescription>
                                     <FormMessage />
                                   </FormItem>
                                 )}
@@ -1157,7 +1862,15 @@ export default function AplicacoesPage() {
                                   type="button"
                                   variant="ghost"
                                   size="icon"
-                                  onClick={() => remove(index)}
+                                  onClick={() => {
+                                    // Limpar estado local ao remover produto
+                                    setDosageInputs(prev => {
+                                      const newState = { ...prev };
+                                      delete newState[index];
+                                      return newState;
+                                    });
+                                    remove(index);
+                                  }}
                                 >
                                   <X className="h-4 w-4" />
                                 </Button>
@@ -1193,10 +1906,32 @@ export default function AplicacoesPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Lista de Aplicações</CardTitle>
-          <CardDescription>
-            {applications.length} aplicação(ões) cadastrada(s)
-          </CardDescription>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle>Lista de Aplicações</CardTitle>
+              <CardDescription>
+                {(() => {
+                  const hasActiveFilters = Object.keys(filters).some(key => {
+                    const value = filters[key as keyof typeof filters];
+                    if (value === undefined) return false;
+                    if (Array.isArray(value)) return value.length > 0;
+                    return value !== "";
+                  });
+                  return hasActiveFilters 
+                    ? `${filteredApplications.length} de ${applications.length} aplicação(ões) filtrada(s)`
+                    : `${applications.length} aplicação(ões) cadastrada(s)`;
+                })()}
+              </CardDescription>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setIsFiltersDialogOpen(true)}
+              className="h-8 w-8 p-0"
+            >
+              <Filter className="h-4 w-4" />
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           {fetchError ? (
@@ -1216,6 +1951,7 @@ export default function AplicacoesPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead>Nome</TableHead>
                   <TableHead>Data</TableHead>
                   <TableHead>Talhão</TableHead>
                   <TableHead>Safra</TableHead>
@@ -1229,6 +1965,9 @@ export default function AplicacoesPage() {
                   const harvestYear = application.harvest_year as HarvestYear | undefined;
                   return (
                     <TableRow key={application.id}>
+                      <TableCell className="font-medium">
+                        {application.name || "Sem nome"}
+                      </TableCell>
                       <TableCell>{formatDate(application.application_date)}</TableCell>
                       <TableCell className="font-medium">
                         {field?.name || "Talhão não encontrado"}
@@ -1252,6 +1991,36 @@ export default function AplicacoesPage() {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleGenerateRecipe(application)}
+                            className="bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
+                          >
+                            <FileText className="h-4 w-4 mr-1" />
+                            Gerar Receita Prática
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleViewRecipes(application)}
+                            className="bg-purple-50 hover:bg-purple-100 text-purple-700 border-purple-200"
+                          >
+                            <List className="h-4 w-4 mr-1" />
+                            Ver Receitas Práticas
+                          </Button>
+                          {(application.status as string) === "PLANNED" ||
+                          (application.status as string) === "planned" ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleMarkAsDone(application)}
+                              className="bg-green-50 hover:bg-green-100 text-green-700 border-green-200"
+                            >
+                              <CheckCircle className="h-4 w-4 mr-1" />
+                              Marcar como Realizado
+                            </Button>
+                          ) : null}
                           <Button
                             variant="ghost"
                             size="icon"
@@ -1277,6 +2046,1094 @@ export default function AplicacoesPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Dialog de Gerar Receita Prática */}
+      <Dialog open={isRecipeDialogOpen} onOpenChange={setIsRecipeDialogOpen}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Gerar Receita Prática</DialogTitle>
+            <DialogDescription>
+              Configure os parâmetros para gerar a receita prática de aplicação
+            </DialogDescription>
+          </DialogHeader>
+          {recipeApplication && (
+            <div className="space-y-6">
+              {/* Informações da Aplicação */}
+              <div className="border-b pb-4">
+                <p className="text-sm font-medium">
+                  Aplicação: {formatDate(recipeApplication.application_date)} -{" "}
+                  {(recipeApplication.field as Field)?.name}
+                </p>
+              </div>
+
+              {/* Seção 1: Seleção do Maquinário */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold">Seleção do Maquinário</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="machinery-select">Pulverizador</Label>
+                    <Select
+                      value={selectedMachineryId}
+                      onValueChange={(value) => {
+                        setSelectedMachineryId(value);
+                        const machinery = machineries.find((m) => m.id === value);
+                        if (machinery) {
+                          // Calcular litros baseado na capacidade e percentual
+                          const liters = (machinery.tank_capacity_liters * capacityUsedPercent) / 100;
+                          if (calculationMode === "liters") {
+                            setLitersOfSolution(liters);
+                            if (applicationRate > 0) {
+                              setAreaHectares(liters / applicationRate);
+                            }
+                          }
+                        }
+                      }}
+                    >
+                      <SelectTrigger id="machinery-select">
+                        <SelectValue placeholder="Selecione o pulverizador" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {machineries.map((machinery) => (
+                          <SelectItem key={machinery.id} value={machinery.id}>
+                            {machinery.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {selectedMachineryId && (
+                    <div>
+                      <Label>Capacidade de Calda</Label>
+                      <p className="text-sm font-medium mt-2">
+                        {machineries.find((m) => m.id === selectedMachineryId)?.tank_capacity_liters.toFixed(0)} L
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {selectedMachineryId && (
+                  <div>
+                    <Label htmlFor="capacity-percent">Percentual da Capacidade a Usar (%)</Label>
+                    <Input
+                      id="capacity-percent"
+                      type="number"
+                      min="1"
+                      max="100"
+                      step="1"
+                      value={capacityUsedPercent === 0 ? "" : capacityUsedPercent}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        // Permitir campo vazio durante digitação
+                        if (value === "" || value === "-") {
+                          setCapacityUsedPercent(0);
+                          return;
+                        }
+                        const percent = parseFloat(value);
+                        if (!isNaN(percent)) {
+                          // Limitar entre 1 e 100
+                          const clampedPercent = Math.min(100, Math.max(1, percent));
+                          setCapacityUsedPercent(clampedPercent);
+                          const machinery = machineries.find((m) => m.id === selectedMachineryId);
+                          if (machinery) {
+                            const liters = (machinery.tank_capacity_liters * clampedPercent) / 100;
+                            if (calculationMode === "liters") {
+                              setLitersOfSolution(liters);
+                              if (applicationRate > 0) {
+                                setAreaHectares(liters / applicationRate);
+                              }
+                            }
+                          }
+                        }
+                      }}
+                      onBlur={(e) => {
+                        const value = e.target.value;
+                        // Se campo estiver vazio ou inválido, definir como 1
+                        if (value === "" || parseFloat(value) < 1 || isNaN(parseFloat(value))) {
+                          setCapacityUsedPercent(1);
+                        }
+                      }}
+                    />
+                    {capacityUsedPercent > 0 && (() => {
+                      const machinery = machineries.find((m) => m.id === selectedMachineryId);
+                      if (machinery) {
+                        const effectiveCapacity = (machinery.tank_capacity_liters * capacityUsedPercent) / 100;
+                        return (
+                          <p className="text-sm text-muted-foreground mt-1">
+                            Capacidade disponível: {effectiveCapacity.toFixed(0)} L
+                          </p>
+                        );
+                      }
+                      return null;
+                    })()}
+                  </div>
+                )}
+              </div>
+
+              {/* Seção 2: Configuração da Calda */}
+              {selectedMachineryId && (
+                <div className="space-y-4 border-t pt-4">
+                  <h3 className="text-lg font-semibold">Configuração da Calda</h3>
+                  
+                  <div>
+                    <Label htmlFor="application-rate">Taxa de Aplicação (L/ha)</Label>
+                    <Input
+                      id="application-rate"
+                      type="number"
+                      min="0"
+                      step="0.1"
+                      value={applicationRate || ""}
+                      onChange={(e) => {
+                        const rate = parseFloat(e.target.value) || 0;
+                        setApplicationRate(rate);
+                        if (rate > 0) {
+                          if (calculationMode === "liters" && litersOfSolution > 0) {
+                            setAreaHectares(litersOfSolution / rate);
+                          } else if (calculationMode === "area" && areaHectares > 0) {
+                            setLitersOfSolution(areaHectares * rate);
+                          }
+                        }
+                      }}
+                    />
+                  </div>
+
+                  <div>
+                    <Label htmlFor="calculation-mode">Modo de Cálculo</Label>
+                    <Select
+                      value={calculationMode}
+                      onValueChange={(value: "liters" | "area") => {
+                        setCalculationMode(value);
+                      }}
+                    >
+                      <SelectTrigger id="calculation-mode">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="liters">Definir Litros de Calda → Calcular Área</SelectItem>
+                        <SelectItem value="area">Definir Área → Calcular Litros de Calda</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {calculationMode === "liters" ? (
+                    <div>
+                      <Label htmlFor="liters-solution">Litros de Calda</Label>
+                      <Input
+                        id="liters-solution"
+                        type="number"
+                        min="0"
+                        step="0.1"
+                        value={litersOfSolution || ""}
+                        onChange={(e) => {
+                          const liters = parseFloat(e.target.value) || 0;
+                          setLitersOfSolution(liters);
+                          if (applicationRate > 0 && liters > 0) {
+                            setAreaHectares(liters / applicationRate);
+                          }
+                        }}
+                      />
+                      {applicationRate > 0 && litersOfSolution > 0 && (
+                        <p className="text-sm text-muted-foreground mt-1">
+                          Área calculada: {areaHectares.toFixed(2)} ha
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <div>
+                      <Label htmlFor="area-hectares">Área (ha)</Label>
+                      <Input
+                        id="area-hectares"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={areaHectares || ""}
+                        onChange={(e) => {
+                          const area = parseFloat(e.target.value) || 0;
+                          setAreaHectares(area);
+                          if (applicationRate > 0 && area > 0) {
+                            setLitersOfSolution(area * applicationRate);
+                          }
+                        }}
+                      />
+                      {applicationRate > 0 && areaHectares > 0 && (() => {
+                        const machinery = machineries.find((m) => m.id === selectedMachineryId);
+                        const totalCapacity = machinery?.tank_capacity_liters || 0;
+                        const effectiveCapacity = (totalCapacity * capacityUsedPercent) / 100;
+                        const calculatedLiters = areaHectares * applicationRate;
+                        const exceedsCapacity = calculatedLiters > effectiveCapacity;
+                        return (
+                          <p className={`text-sm mt-1 ${exceedsCapacity ? "text-red-600 font-medium" : "text-muted-foreground"}`}>
+                            Litros de calda necessários: {calculatedLiters.toFixed(2)} L
+                            {exceedsCapacity && (
+                              <span className="block mt-1">⚠️ Excede a capacidade disponível ({effectiveCapacity.toFixed(0)} L). Deve ser menor ou igual.</span>
+                            )}
+                          </p>
+                        );
+                      })()}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Seção 3: Multiplicador */}
+              {selectedMachineryId && areaHectares > 0 && (
+                <div className="space-y-4 border-t pt-4">
+                  <h3 className="text-lg font-semibold">Multiplicador</h3>
+                  <div>
+                    <Label htmlFor="multiplier">Quantas vezes você quer aplicar essa receita?</Label>
+                    <Input
+                      id="multiplier"
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={multiplier === 0 ? "" : multiplier}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        if (value === "") {
+                          setMultiplier(0);
+                          return;
+                        }
+                        const mult = parseInt(value);
+                        if (!isNaN(mult)) {
+                          setMultiplier(Math.max(1, mult));
+                        }
+                      }}
+                      onBlur={(e) => {
+                        const value = e.target.value;
+                        if (value === "" || parseInt(value) < 1) {
+                          setMultiplier(1);
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Seção 4: Lista de Produtos */}
+              {recipeApplication.application_products &&
+                recipeApplication.application_products.length > 0 &&
+                areaHectares > 0 && (
+                  <div className="space-y-4 border-t pt-4">
+                    <h3 className="text-lg font-semibold">Produtos da Aplicação</h3>
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Produto</TableHead>
+                            <TableHead>Dosagem</TableHead>
+                            <TableHead>Quantidade Total</TableHead>
+                            <TableHead>Quantidade na Receita</TableHead>
+                            <TableHead>Quantidade Restante</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {recipeApplication.application_products.map((ap: any) => {
+                            const product = ap.product as Product;
+                            const dosage = ap.dosage || 0;
+                            const totalQuantity = ap.quantity_used || 0;
+                            const areaInRecipe = areaHectares * multiplier;
+                            const quantityInRecipe = dosage * areaInRecipe;
+                            
+                            // Calcular quantidade restante (acumulativa)
+                            const totalUsedInPreviousRecipes = existingRecipes.reduce((sum, recipe) => {
+                              const recipeProduct = recipe.practical_recipe_products?.find(
+                                (prp: any) => prp.product_id === product.id
+                              );
+                              if (recipeProduct) {
+                                return sum + (recipeProduct.quantity_in_recipe || 0);
+                              }
+                              return sum;
+                            }, 0);
+                            
+                            const remainingQuantity = totalQuantity - totalUsedInPreviousRecipes - quantityInRecipe;
+
+                            return (
+                              <TableRow key={ap.id}>
+                                <TableCell className="font-medium">{product?.name || "Produto"}</TableCell>
+                                <TableCell>
+                                  {dosage.toFixed(2)} {ap.dosage_unit || "L/ha"}
+                                </TableCell>
+                                <TableCell>{totalQuantity.toFixed(2)}</TableCell>
+                                <TableCell className="font-medium">
+                                  {quantityInRecipe.toFixed(2)}
+                                </TableCell>
+                                <TableCell
+                                  className={
+                                    remainingQuantity < 0
+                                      ? "text-red-600 font-medium"
+                                      : "text-muted-foreground"
+                                  }
+                                >
+                                  {remainingQuantity.toFixed(2)}
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </div>
+                )}
+
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setIsRecipeDialogOpen(false);
+                    setRecipeApplication(null);
+                    setSelectedMachineryId("");
+                    setCapacityUsedPercent(100);
+                    setApplicationRate(0);
+                    setCalculationMode("liters");
+                    setLitersOfSolution(0);
+                    setAreaHectares(0);
+                    setMultiplier(1);
+                  }}
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  onClick={async () => {
+                    if (!recipeApplication || !selectedMachineryId) return;
+
+                    // Validar se os litros de calda não excedem a capacidade efetiva
+                    const machinery = machineries.find((m) => m.id === selectedMachineryId);
+                    if (machinery) {
+                      const totalCapacity = machinery.tank_capacity_liters;
+                      const effectiveCapacity = (totalCapacity * capacityUsedPercent) / 100;
+                      const calculatedLiters = calculationMode === "liters" 
+                        ? litersOfSolution 
+                        : (areaHectares * applicationRate);
+                      
+                      if (calculatedLiters > effectiveCapacity) {
+                        alert(`Erro: Os litros de calda necessários (${calculatedLiters.toFixed(2)} L) excedem a capacidade disponível (${effectiveCapacity.toFixed(0)} L). Deve ser menor ou igual.`);
+                        return;
+                      }
+                    }
+
+                    try {
+                      // Preparar produtos para salvar
+                      const productsToSave = (recipeApplication.application_products || []).map((ap: any) => {
+                        const product = ap.product as Product;
+                        const dosage = ap.dosage || 0;
+                        const areaInRecipe = areaHectares * multiplier;
+                        const quantityInRecipe = dosage * areaInRecipe;
+                        
+                        // Calcular quantidade restante (acumulativa)
+                        const totalUsedInPreviousRecipes = existingRecipes.reduce((sum, recipe) => {
+                          const recipeProduct = recipe.practical_recipe_products?.find(
+                            (prp: any) => prp.product_id === product.id
+                          );
+                          if (recipeProduct) {
+                            return sum + (recipeProduct.quantity_in_recipe || 0);
+                          }
+                          return sum;
+                        }, 0);
+                        
+                        const totalQuantity = ap.quantity_used || 0;
+                        const remainingQuantity = totalQuantity - totalUsedInPreviousRecipes - quantityInRecipe;
+
+                        return {
+                          product_id: product.id,
+                          dosage: dosage,
+                          quantity_in_recipe: quantityInRecipe,
+                          remaining_quantity: remainingQuantity,
+                        };
+                      });
+
+                      const newRecipe = await createPracticalRecipe(
+                        recipeApplication.id,
+                        selectedMachineryId,
+                        capacityUsedPercent,
+                        applicationRate,
+                        calculationMode === "liters" ? litersOfSolution : null,
+                        calculationMode === "area" ? areaHectares : null,
+                        multiplier,
+                        productsToSave
+                      );
+
+                      queryClient.invalidateQueries({ queryKey: ["practical_recipes"] });
+                      setIsRecipeDialogOpen(false);
+                      setRecipeApplication(null);
+                      setSelectedMachineryId("");
+                      setCapacityUsedPercent(100);
+                      setApplicationRate(0);
+                      setCalculationMode("liters");
+                      setLitersOfSolution(0);
+                      setAreaHectares(0);
+                      setMultiplier(1);
+                      
+                      // Redirecionar para página de visualização
+                      router.push(`/aplicacoes/receitas/${newRecipe.id}`);
+                    } catch (error: any) {
+                      alert(`Erro ao gerar receita prática: ${error.message}`);
+                    }
+                  }}
+                  disabled={!selectedMachineryId || areaHectares <= 0 || applicationRate <= 0}
+                >
+                  Gerar Receita
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog para Ver Receitas Práticas */}
+      <Dialog open={isViewRecipesDialogOpen} onOpenChange={setIsViewRecipesDialogOpen}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Receitas Práticas</DialogTitle>
+            {viewRecipesApplication && (
+              <DialogDescription asChild>
+                <span>Aplicação: {viewRecipesApplication.name}</span>
+              </DialogDescription>
+            )}
+          </DialogHeader>
+          {viewRecipesApplication && (
+            <div className="space-y-4">
+              {/* Card informativo com área restante */}
+              <Card>
+                <CardContent className="pt-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-muted-foreground">Área sem receita</p>
+                      <p className="text-2xl font-bold">
+                        {calculateRemainingArea(viewRecipesApplication, practicalRecipes).toFixed(2)} ha
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Tabela de receitas práticas */}
+              <div>
+                <h3 className="text-lg font-semibold mb-4">Receitas Criadas</h3>
+                {practicalRecipes.length === 0 ? (
+                  <p className="text-center text-muted-foreground py-8">
+                    Nenhuma receita prática criada para esta aplicação.
+                  </p>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Data de Geração</TableHead>
+                        <TableHead>Maquinário</TableHead>
+                        <TableHead>Área (ha)</TableHead>
+                        <TableHead>Litros de Calda</TableHead>
+                        <TableHead>Taxa de Aplicação</TableHead>
+                        <TableHead>Multiplicador</TableHead>
+                        <TableHead className="text-right">Ações</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {practicalRecipes.map((recipe) => {
+                        const machinery = recipe.machinery as Machinery | undefined;
+                        return (
+                          <TableRow key={recipe.id}>
+                            <TableCell>
+                              {formatDate(recipe.created_at)}
+                            </TableCell>
+                            <TableCell>
+                              {machinery?.name || "Maquinário não encontrado"}
+                            </TableCell>
+                            <TableCell>
+                              {(recipe.area_hectares || 0).toFixed(2)}
+                            </TableCell>
+                            <TableCell>
+                              {(recipe.liters_of_solution || 0).toFixed(2)} L
+                            </TableCell>
+                            <TableCell>
+                              {recipe.application_rate_liters_per_hectare.toFixed(2)} L/ha
+                            </TableCell>
+                            <TableCell>
+                              {recipe.multiplier}x
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <div className="flex justify-end gap-2">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => handleEditRecipe(recipe)}
+                                >
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => handleDeleteRecipe(recipe.id)}
+                                >
+                                  <Trash2 className="h-4 w-4 text-destructive" />
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                )}
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog para Editar Receita Prática */}
+      <Dialog open={isEditRecipeDialogOpen} onOpenChange={setIsEditRecipeDialogOpen}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Editar Receita Prática</DialogTitle>
+            <DialogDescription>
+              Edite as configurações da receita prática
+            </DialogDescription>
+          </DialogHeader>
+          {editingRecipe && viewRecipesApplication && (
+            <div className="space-y-6">
+              {/* Informações da Aplicação */}
+              <div className="border-b pb-4">
+                <p className="text-sm font-medium">
+                  Aplicação: {viewRecipesApplication.name} - {formatDate(viewRecipesApplication.application_date)}
+                </p>
+              </div>
+
+              {/* Seção 1: Seleção do Maquinário */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold">Seleção do Maquinário</h3>
+                <div>
+                  <Label htmlFor="edit-machinery-select">Pulverizador</Label>
+                  <Select
+                    value={editSelectedMachineryId}
+                    onValueChange={(value) => {
+                      setEditSelectedMachineryId(value);
+                      const machinery = machineries.find((m) => m.id === value);
+                      if (machinery) {
+                        const liters = (machinery.tank_capacity_liters * editCapacityUsedPercent) / 100;
+                        if (editCalculationMode === "liters") {
+                          setEditLitersOfSolution(liters);
+                          if (editApplicationRate > 0) {
+                            setEditAreaHectares(liters / editApplicationRate);
+                          }
+                        }
+                      }
+                    }}
+                  >
+                    <SelectTrigger id="edit-machinery-select">
+                      <SelectValue placeholder="Selecione o pulverizador" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {machineries.map((machinery) => (
+                        <SelectItem key={machinery.id} value={machinery.id}>
+                          {machinery.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {editSelectedMachineryId && (
+                  <div>
+                    <Label>Capacidade de Calda</Label>
+                    <p className="text-sm font-medium mt-2">
+                      {machineries.find((m) => m.id === editSelectedMachineryId)?.tank_capacity_liters.toFixed(0)} L
+                    </p>
+                  </div>
+                )}
+                {editSelectedMachineryId && (
+                  <div>
+                    <Label htmlFor="edit-capacity-percent">Percentual da Capacidade a Usar (%)</Label>
+                    <Input
+                      id="edit-capacity-percent"
+                      type="number"
+                      min="1"
+                      max="100"
+                      step="1"
+                      value={editCapacityUsedPercent === 0 ? "" : editCapacityUsedPercent}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        // Permitir campo vazio durante digitação
+                        if (value === "" || value === "-") {
+                          setEditCapacityUsedPercent(0);
+                          return;
+                        }
+                        const percent = parseFloat(value);
+                        if (!isNaN(percent)) {
+                          // Limitar entre 1 e 100
+                          const clampedPercent = Math.min(100, Math.max(1, percent));
+                          setEditCapacityUsedPercent(clampedPercent);
+                          const machinery = machineries.find((m) => m.id === editSelectedMachineryId);
+                          if (machinery) {
+                            const liters = (machinery.tank_capacity_liters * clampedPercent) / 100;
+                            if (editCalculationMode === "liters") {
+                              setEditLitersOfSolution(liters);
+                              if (editApplicationRate > 0) {
+                                setEditAreaHectares(liters / editApplicationRate);
+                              }
+                            }
+                          }
+                        }
+                      }}
+                      onBlur={(e) => {
+                        const value = e.target.value;
+                        // Se campo estiver vazio ou inválido, definir como 1
+                        if (value === "" || parseFloat(value) < 1 || isNaN(parseFloat(value))) {
+                          setEditCapacityUsedPercent(1);
+                        }
+                      }}
+                    />
+                    {editCapacityUsedPercent > 0 && (() => {
+                      const machinery = machineries.find((m) => m.id === editSelectedMachineryId);
+                      if (machinery) {
+                        const effectiveCapacity = (machinery.tank_capacity_liters * editCapacityUsedPercent) / 100;
+                        return (
+                          <p className="text-sm text-muted-foreground mt-1">
+                            Capacidade disponível: {effectiveCapacity.toFixed(0)} L
+                          </p>
+                        );
+                      }
+                      return null;
+                    })()}
+                  </div>
+                )}
+              </div>
+
+              {/* Seção 2: Configuração da Calda */}
+              {editSelectedMachineryId && (
+                <div className="space-y-4 border-t pt-4">
+                  <h3 className="text-lg font-semibold">Configuração da Calda</h3>
+                  
+                  <div>
+                    <Label htmlFor="edit-application-rate">Taxa de Aplicação (L/ha)</Label>
+                    <Input
+                      id="edit-application-rate"
+                      type="number"
+                      min="0"
+                      step="0.1"
+                      value={editApplicationRate || ""}
+                      onChange={(e) => {
+                        const rate = parseFloat(e.target.value) || 0;
+                        setEditApplicationRate(rate);
+                        if (rate > 0) {
+                          if (editCalculationMode === "liters" && editLitersOfSolution > 0) {
+                            setEditAreaHectares(editLitersOfSolution / rate);
+                          } else if (editCalculationMode === "area" && editAreaHectares > 0) {
+                            setEditLitersOfSolution(editAreaHectares * rate);
+                          }
+                        }
+                      }}
+                    />
+                  </div>
+
+                  <div>
+                    <Label htmlFor="edit-calculation-mode">Modo de Cálculo</Label>
+                    <Select
+                      value={editCalculationMode}
+                      onValueChange={(value: "liters" | "area") => {
+                        setEditCalculationMode(value);
+                      }}
+                    >
+                      <SelectTrigger id="edit-calculation-mode">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="liters">Definir Litros de Calda → Calcular Área</SelectItem>
+                        <SelectItem value="area">Definir Área → Calcular Litros de Calda</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {editCalculationMode === "liters" ? (
+                    <div>
+                      <Label htmlFor="edit-liters-solution">Litros de Calda</Label>
+                      <Input
+                        id="edit-liters-solution"
+                        type="number"
+                        min="0"
+                        step="0.1"
+                        value={editLitersOfSolution || ""}
+                        onChange={(e) => {
+                          const liters = parseFloat(e.target.value) || 0;
+                          setEditLitersOfSolution(liters);
+                          if (editApplicationRate > 0 && liters > 0) {
+                            setEditAreaHectares(liters / editApplicationRate);
+                          }
+                        }}
+                      />
+                      {editApplicationRate > 0 && editLitersOfSolution > 0 && (() => {
+                        const machinery = machineries.find((m) => m.id === editSelectedMachineryId);
+                        const totalCapacity = machinery?.tank_capacity_liters || 0;
+                        const effectiveCapacity = (totalCapacity * editCapacityUsedPercent) / 100;
+                        const exceedsCapacity = editLitersOfSolution > effectiveCapacity;
+                        return (
+                          <p className={`text-sm mt-1 ${exceedsCapacity ? "text-red-600 font-medium" : "text-muted-foreground"}`}>
+                            Área calculada: {editAreaHectares.toFixed(2)} ha
+                            {exceedsCapacity && (
+                              <span className="block mt-1">⚠️ Litros de calda ({editLitersOfSolution.toFixed(2)} L) excedem a capacidade disponível ({effectiveCapacity.toFixed(0)} L). Deve ser menor ou igual.</span>
+                            )}
+                          </p>
+                        );
+                      })()}
+                    </div>
+                  ) : (
+                    <div>
+                      <Label htmlFor="edit-area-hectares">Área (ha)</Label>
+                      <Input
+                        id="edit-area-hectares"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={editAreaHectares || ""}
+                        onChange={(e) => {
+                          const area = parseFloat(e.target.value) || 0;
+                          setEditAreaHectares(area);
+                          if (editApplicationRate > 0 && area > 0) {
+                            setEditLitersOfSolution(area * editApplicationRate);
+                          }
+                        }}
+                      />
+                      {editApplicationRate > 0 && editAreaHectares > 0 && (() => {
+                        const machinery = machineries.find((m) => m.id === editSelectedMachineryId);
+                        const capacity = machinery?.tank_capacity_liters || 0;
+                        const calculatedLiters = editAreaHectares * editApplicationRate;
+                        const exceedsCapacity = calculatedLiters > capacity;
+                        return (
+                          <p className={`text-sm mt-1 ${exceedsCapacity ? "text-red-600 font-medium" : "text-muted-foreground"}`}>
+                            Litros de calda necessários: {calculatedLiters.toFixed(2)} L
+                            {exceedsCapacity && (
+                              <span className="block mt-1">⚠️ Excede a capacidade do maquinário ({capacity.toFixed(0)} L). Deve ser menor ou igual.</span>
+                            )}
+                          </p>
+                        );
+                      })()}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Seção 3: Multiplicador */}
+              {editSelectedMachineryId && editAreaHectares > 0 && (
+                <div className="space-y-4 border-t pt-4">
+                  <h3 className="text-lg font-semibold">Multiplicador</h3>
+                  <div>
+                    <Label htmlFor="edit-multiplier">Quantas vezes você quer aplicar essa receita?</Label>
+                    <Input
+                      id="edit-multiplier"
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={editMultiplier === 0 ? "" : editMultiplier}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        if (value === "") {
+                          setEditMultiplier(0);
+                          return;
+                        }
+                        const mult = parseInt(value);
+                        if (!isNaN(mult)) {
+                          setEditMultiplier(Math.max(1, mult));
+                        }
+                      }}
+                      onBlur={(e) => {
+                        const value = e.target.value;
+                        if (value === "" || parseInt(value) < 1) {
+                          setEditMultiplier(1);
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Seção 4: Lista de Produtos */}
+              {viewRecipesApplication.application_products &&
+                viewRecipesApplication.application_products.length > 0 &&
+                editAreaHectares > 0 && (
+                  <div className="space-y-4 border-t pt-4">
+                    <h3 className="text-lg font-semibold">Produtos da Aplicação</h3>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Produto</TableHead>
+                          <TableHead>Dosagem</TableHead>
+                          <TableHead>Quantidade Total</TableHead>
+                          <TableHead>Quantidade na Receita</TableHead>
+                          <TableHead>Quantidade Restante</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {viewRecipesApplication.application_products.map((ap: any) => {
+                          const product = ap.product as Product;
+                          const dosage = ap.dosage || 0;
+                          const totalQuantity = ap.quantity_used || 0;
+                          const areaInRecipe = editAreaHectares * editMultiplier;
+                          const quantityInRecipe = dosage * areaInRecipe;
+                          
+                          // Calcular quantidade restante (excluindo a receita atual da soma)
+                          const totalUsedInOtherRecipes = practicalRecipes
+                            .filter((r) => r.id !== editingRecipe.id)
+                            .reduce((sum, recipe) => {
+                              const recipeProduct = recipe.practical_recipe_products?.find(
+                                (prp: any) => prp.product_id === product.id
+                              );
+                              if (recipeProduct) {
+                                return sum + (recipeProduct.quantity_in_recipe || 0);
+                              }
+                              return sum;
+                            }, 0);
+                          
+                          const remainingQuantity = totalQuantity - totalUsedInOtherRecipes - quantityInRecipe;
+
+                          return (
+                            <TableRow key={ap.id}>
+                              <TableCell className="font-medium">{product?.name || "Produto"}</TableCell>
+                              <TableCell>
+                                {dosage.toFixed(2)} {ap.dosage_unit || "L/ha"}
+                              </TableCell>
+                              <TableCell>{totalQuantity.toFixed(2)}</TableCell>
+                              <TableCell className="font-medium">
+                                {quantityInRecipe.toFixed(2)}
+                              </TableCell>
+                              <TableCell
+                                className={
+                                  remainingQuantity < 0
+                                    ? "text-red-600 font-medium"
+                                    : "text-muted-foreground"
+                                }
+                              >
+                                {remainingQuantity.toFixed(2)}
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setIsEditRecipeDialogOpen(false);
+                    setEditingRecipe(null);
+                  }}
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  onClick={async () => {
+                    if (!editingRecipe || !viewRecipesApplication || !editSelectedMachineryId || editAreaHectares <= 0 || editApplicationRate <= 0) {
+                      return;
+                    }
+
+                    // Validar se os litros de calda não excedem a capacidade efetiva
+                    const machinery = machineries.find((m) => m.id === editSelectedMachineryId);
+                    if (machinery) {
+                      const totalCapacity = machinery.tank_capacity_liters;
+                      const effectiveCapacity = (totalCapacity * editCapacityUsedPercent) / 100;
+                      const calculatedLiters = editCalculationMode === "liters" 
+                        ? editLitersOfSolution 
+                        : (editAreaHectares * editApplicationRate);
+                      
+                      if (calculatedLiters > effectiveCapacity) {
+                        alert(`Erro: Os litros de calda necessários (${calculatedLiters.toFixed(2)} L) excedem a capacidade disponível (${effectiveCapacity.toFixed(0)} L). Deve ser menor ou igual.`);
+                        return;
+                      }
+                    }
+
+                    try {
+                      // Preparar produtos para salvar
+                      const productsToSave = (viewRecipesApplication.application_products || []).map((ap: any) => {
+                        const product = ap.product as Product;
+                        const dosage = ap.dosage || 0;
+                        const areaInRecipe = editAreaHectares * editMultiplier;
+                        const quantityInRecipe = dosage * areaInRecipe;
+                        
+                        // Calcular quantidade restante (excluindo a receita atual)
+                        const totalUsedInOtherRecipes = practicalRecipes
+                          .filter((r) => r.id !== editingRecipe.id)
+                          .reduce((sum, recipe) => {
+                            const recipeProduct = recipe.practical_recipe_products?.find(
+                              (prp: any) => prp.product_id === product.id
+                            );
+                            if (recipeProduct) {
+                              return sum + (recipeProduct.quantity_in_recipe || 0);
+                            }
+                            return sum;
+                          }, 0);
+                        
+                        const totalQuantity = ap.quantity_used || 0;
+                        const remainingQuantity = totalQuantity - totalUsedInOtherRecipes - quantityInRecipe;
+
+                        return {
+                          product_id: product.id,
+                          dosage: dosage,
+                          quantity_in_recipe: quantityInRecipe,
+                          remaining_quantity: remainingQuantity,
+                        };
+                      });
+
+                      await updateRecipeMutation.mutateAsync({
+                        recipeId: editingRecipe.id,
+                        machineryId: editSelectedMachineryId,
+                        capacityUsedPercent: editCapacityUsedPercent,
+                        applicationRate: editApplicationRate,
+                        litersOfSolution: editCalculationMode === "liters" ? editLitersOfSolution : null,
+                        areaHectares: editCalculationMode === "area" ? editAreaHectares : null,
+                        multiplier: editMultiplier,
+                        products: productsToSave,
+                      });
+                    } catch (error: any) {
+                      alert(`Erro ao atualizar receita prática: ${error.message}`);
+                    }
+                  }}
+                  disabled={!editSelectedMachineryId || editAreaHectares <= 0 || editApplicationRate <= 0 || updateRecipeMutation.isPending}
+                >
+                  {updateRecipeMutation.isPending ? "Salvando..." : "Salvar Alterações"}
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog de Filtros */}
+      <Dialog open={isFiltersDialogOpen} onOpenChange={setIsFiltersDialogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Filtros</DialogTitle>
+            <DialogDescription>
+              Selecione os filtros para filtrar a lista de aplicações
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            {/* Filtro por Nome */}
+            <div>
+              <Label htmlFor="filter-name">Nome</Label>
+              <Input
+                id="filter-name"
+                placeholder="Buscar por nome..."
+                value={filters.name || ""}
+                onChange={(e) => setFilters({ ...filters, name: e.target.value })}
+              />
+            </div>
+
+            {/* Filtro por Data */}
+            <div>
+              <Label htmlFor="filter-date">Data</Label>
+              <Input
+                id="filter-date"
+                type="date"
+                value={filters.date || ""}
+                onChange={(e) => setFilters({ ...filters, date: e.target.value })}
+              />
+            </div>
+
+            {/* Filtro por Talhão */}
+            <div>
+              <Label>Talhão</Label>
+              <div className="space-y-2 mt-2 max-h-40 overflow-y-auto border rounded-md p-2">
+                {fields.map((field) => (
+                  <div key={field.id} className="flex items-center space-x-2">
+                    <Checkbox
+                      id={`filter-field-${field.id}`}
+                      checked={filters.fieldIds?.includes(field.id) || false}
+                      onCheckedChange={(checked) => {
+                        const currentIds = filters.fieldIds || [];
+                        if (checked) {
+                          setFilters({ ...filters, fieldIds: [...currentIds, field.id] });
+                        } else {
+                          setFilters({ ...filters, fieldIds: currentIds.filter((id) => id !== field.id) });
+                        }
+                      }}
+                    />
+                    <Label
+                      htmlFor={`filter-field-${field.id}`}
+                      className="text-sm font-normal cursor-pointer"
+                    >
+                      {field.name}
+                    </Label>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Filtro por Safra */}
+            <div>
+              <Label>Safra</Label>
+              <div className="space-y-2 mt-2 max-h-40 overflow-y-auto border rounded-md p-2">
+                {harvestYears.map((harvestYear) => (
+                  <div key={harvestYear.id} className="flex items-center space-x-2">
+                    <Checkbox
+                      id={`filter-harvest-year-${harvestYear.id}`}
+                      checked={filters.harvestYearIds?.includes(harvestYear.id) || false}
+                      onCheckedChange={(checked) => {
+                        const currentIds = filters.harvestYearIds || [];
+                        if (checked) {
+                          setFilters({ ...filters, harvestYearIds: [...currentIds, harvestYear.id] });
+                        } else {
+                          setFilters({ ...filters, harvestYearIds: currentIds.filter((id) => id !== harvestYear.id) });
+                        }
+                      }}
+                    />
+                    <Label
+                      htmlFor={`filter-harvest-year-${harvestYear.id}`}
+                      className="text-sm font-normal cursor-pointer"
+                    >
+                      {harvestYear.name}
+                    </Label>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Filtro por Status */}
+            <div>
+              <Label>Status</Label>
+              <div className="space-y-2 mt-2">
+                {[
+                  { value: "planned", label: "Planejado" },
+                  { value: "completed", label: "Realizado" },
+                  { value: "cancelled", label: "Cancelado" },
+                ].map((status) => (
+                  <div key={status.value} className="flex items-center space-x-2">
+                    <Checkbox
+                      id={`filter-status-${status.value}`}
+                      checked={filters.statuses?.includes(status.value) || false}
+                      onCheckedChange={(checked) => {
+                        const currentStatuses = filters.statuses || [];
+                        if (checked) {
+                          setFilters({ ...filters, statuses: [...currentStatuses, status.value] });
+                        } else {
+                          setFilters({ ...filters, statuses: currentStatuses.filter((s) => s !== status.value) });
+                        }
+                      }}
+                    />
+                    <Label
+                      htmlFor={`filter-status-${status.value}`}
+                      className="text-sm font-normal cursor-pointer"
+                    >
+                      {status.label}
+                    </Label>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setFilters({});
+                setIsFiltersDialogOpen(false);
+              }}
+            >
+              Limpar Filtros
+            </Button>
+            <Button onClick={() => setIsFiltersDialogOpen(false)}>
+              Aplicar Filtros
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
