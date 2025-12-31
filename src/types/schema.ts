@@ -229,6 +229,8 @@ export interface Application {
   machine?: string;
   notes?: string;
   completed_at?: string; // ISO date string (quando foi realizada)
+  is_partial?: boolean; // Indica se é aplicação parcial
+  partial_area?: number; // Área em hectares para aplicação parcial
   created_at: string;
   updated_at: string;
   // Relations
