@@ -304,6 +304,7 @@ export interface PracticalRecipe {
   machinery?: Machinery;
   application?: Application;
   products?: PracticalRecipeProduct[];
+  practical_recipe_products?: PracticalRecipeProduct[]; // Alias para compatibilidade com Supabase
 }
 
 /**
