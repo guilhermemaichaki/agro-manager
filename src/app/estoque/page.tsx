@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { Plus, Pencil, Trash2, ArrowDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -368,6 +368,8 @@ function formatCurrency(value: number): string {
 export default function EstoquePage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<StockMovement | null>(null);
+  const [sortColumn, setSortColumn] = useState<string | null>(null);
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const queryClient = useQueryClient();
 
   // Query para buscar saldo de estoque (Aba 1)
@@ -480,6 +482,69 @@ export default function EstoquePage() {
     return date.toISOString().split("T")[0];
   }
 
+  // Função para ordenar
+  const handleSort = (column: string) => {
+    if (sortColumn === column) {
+      // Se já está ordenando por esta coluna, inverte a direção
+      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
+    } else {
+      // Nova coluna: define direção padrão
+      // Texto: asc (A-Z), Números: desc (maiores primeiro)
+      const isTextColumn = column === "product_name" || column === "categories" || column === "unit";
+      setSortColumn(column);
+      setSortDirection(isTextColumn ? "asc" : "desc");
+    }
+  };
+
+  // Ordenar dados
+  const sortedStockBalance = useMemo(() => {
+    if (!sortColumn) return stockBalance;
+
+    return [...stockBalance].sort((a, b) => {
+      let aValue: any;
+      let bValue: any;
+
+      switch (sortColumn) {
+        case "product_name":
+          aValue = a.product_name || "";
+          bValue = b.product_name || "";
+          break;
+        case "categories":
+          aValue = (a.categories && a.categories.length > 0) ? a.categories.join(", ") : "";
+          bValue = (b.categories && b.categories.length > 0) ? b.categories.join(", ") : "";
+          break;
+        case "unit":
+          aValue = a.unit || "";
+          bValue = b.unit || "";
+          break;
+        case "average_price":
+          aValue = a.average_price ?? 0;
+          bValue = b.average_price ?? 0;
+          break;
+        case "balance":
+          aValue = a.balance ?? 0;
+          bValue = b.balance ?? 0;
+          break;
+        case "predicted_quantity":
+          aValue = a.predicted_quantity ?? 0;
+          bValue = b.predicted_quantity ?? 0;
+          break;
+        default:
+          return 0;
+      }
+
+      // Comparação
+      let comparison = 0;
+      if (typeof aValue === "string" && typeof bValue === "string") {
+        comparison = aValue.localeCompare(bValue, "pt-BR");
+      } else {
+        comparison = aValue - bValue;
+      }
+
+      return sortDirection === "asc" ? comparison : -comparison;
+    });
+  }, [stockBalance, sortColumn, sortDirection]);
+
   return (
     <div className="space-y-6">
       <div>
@@ -517,16 +582,76 @@ export default function EstoquePage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Produto</TableHead>
-                      <TableHead>Categoria</TableHead>
-                      <TableHead>Unidade</TableHead>
-                      <TableHead className="text-right">Valor médio (R$/unidade)</TableHead>
-                      <TableHead className="text-right">Quantidade atual</TableHead>
-                      <TableHead className="text-right">Quantidade prevista</TableHead>
+                      <TableHead 
+                        className="cursor-pointer hover:bg-muted/50"
+                        onClick={() => handleSort("product_name")}
+                      >
+                        <div className="flex items-center gap-1">
+                          Produto
+                          {sortColumn === "product_name" && (
+                            <ArrowDown className={`h-3 w-3 text-muted-foreground ${sortDirection === "asc" ? "rotate-180" : ""}`} />
+                          )}
+                        </div>
+                      </TableHead>
+                      <TableHead 
+                        className="cursor-pointer hover:bg-muted/50"
+                        onClick={() => handleSort("categories")}
+                      >
+                        <div className="flex items-center gap-1">
+                          Categoria
+                          {sortColumn === "categories" && (
+                            <ArrowDown className={`h-3 w-3 text-muted-foreground ${sortDirection === "asc" ? "rotate-180" : ""}`} />
+                          )}
+                        </div>
+                      </TableHead>
+                      <TableHead 
+                        className="cursor-pointer hover:bg-muted/50"
+                        onClick={() => handleSort("unit")}
+                      >
+                        <div className="flex items-center gap-1">
+                          Unidade
+                          {sortColumn === "unit" && (
+                            <ArrowDown className={`h-3 w-3 text-muted-foreground ${sortDirection === "asc" ? "rotate-180" : ""}`} />
+                          )}
+                        </div>
+                      </TableHead>
+                      <TableHead 
+                        className="text-right cursor-pointer hover:bg-muted/50"
+                        onClick={() => handleSort("average_price")}
+                      >
+                        <div className="flex items-center justify-end gap-1">
+                          Valor médio (R$/unidade)
+                          {sortColumn === "average_price" && (
+                            <ArrowDown className={`h-3 w-3 text-muted-foreground ${sortDirection === "asc" ? "rotate-180" : ""}`} />
+                          )}
+                        </div>
+                      </TableHead>
+                      <TableHead 
+                        className="text-right cursor-pointer hover:bg-muted/50"
+                        onClick={() => handleSort("balance")}
+                      >
+                        <div className="flex items-center justify-end gap-1">
+                          Quantidade atual
+                          {sortColumn === "balance" && (
+                            <ArrowDown className={`h-3 w-3 text-muted-foreground ${sortDirection === "asc" ? "rotate-180" : ""}`} />
+                          )}
+                        </div>
+                      </TableHead>
+                      <TableHead 
+                        className="text-right cursor-pointer hover:bg-muted/50"
+                        onClick={() => handleSort("predicted_quantity")}
+                      >
+                        <div className="flex items-center justify-end gap-1">
+                          Quantidade prevista
+                          {sortColumn === "predicted_quantity" && (
+                            <ArrowDown className={`h-3 w-3 text-muted-foreground ${sortDirection === "asc" ? "rotate-180" : ""}`} />
+                          )}
+                        </div>
+                      </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {stockBalance.map((item) => (
+                    {sortedStockBalance.map((item) => (
                       <TableRow key={item.product_id}>
                         <TableCell className="font-medium">
                           {item.product_name}

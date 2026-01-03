@@ -119,64 +119,37 @@ export default function ReceitaPraticaPage() {
           <CardTitle className="text-2xl text-center">Receita Prática de Aplicação</CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
-          {/* Informações da Aplicação */}
-          <div className="grid grid-cols-2 gap-4 border-b pb-4">
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">Data da Aplicação</p>
-              <p className="text-lg">{formatDate(application?.application_date || "")}</p>
-            </div>
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">Talhão</p>
-              <p className="text-lg">{field?.name || "N/A"}</p>
-            </div>
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">Ano Safra</p>
-              <p className="text-lg">{harvestYear?.name || "N/A"}</p>
-            </div>
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">Data de Geração</p>
-              <p className="text-lg">{formatDate(recipe.created_at)}</p>
-            </div>
-          </div>
-
-          {/* Informações do Maquinário */}
-          <div className="grid grid-cols-2 gap-4 border-b pb-4">
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">Maquinário</p>
-              <p className="text-lg">{machinery?.name || "N/A"}</p>
-            </div>
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">Capacidade do Tanque</p>
-              <p className="text-lg">{machinery?.tank_capacity_liters.toFixed(0) || "N/A"} L</p>
-            </div>
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">Percentual Usado</p>
-              <p className="text-lg">{recipe.capacity_used_percent.toFixed(0)}%</p>
-            </div>
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">Litros de Calda</p>
-              <p className="text-lg">
-                {recipe.liters_of_solution
-                  ? recipe.liters_of_solution.toFixed(2)
-                  : ((machinery?.tank_capacity_liters || 0) * recipe.capacity_used_percent) / 100}{" "}
-                L
-              </p>
-            </div>
-          </div>
-
-          {/* Configurações */}
-          <div className="grid grid-cols-2 gap-4 border-b pb-4">
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">Taxa de Aplicação</p>
-              <p className="text-lg">{recipe.application_rate_liters_per_hectare.toFixed(2)} L/ha</p>
-            </div>
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">Área</p>
-              <p className="text-lg">{recipe.area_hectares?.toFixed(2) || "N/A"} ha</p>
-            </div>
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">Multiplicador</p>
-              <p className="text-lg">{recipe.multiplier}x</p>
+          {/* Cabeçalho Simplificado */}
+          <div className="border-b pb-4 space-y-2">
+            <div className="flex flex-wrap items-center gap-4 text-sm">
+              <div>
+                <span className="text-muted-foreground">Talhão: </span>
+                <span className="font-medium">{field?.name || "N/A"}</span>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Nome da aplicação: </span>
+                <span className="font-medium">{application?.name || "N/A"}</span>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Dose para </span>
+                <span className="font-medium">
+                  {recipe.area_hectares ? `${recipe.area_hectares.toFixed(2)} ha` : "N/A"}
+                </span>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Data: </span>
+                <span className="font-medium">{formatDate(application?.application_date || "")}</span>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Quantidade de calda: </span>
+                <span className="font-medium">
+                  {recipe.liters_of_solution
+                    ? `${recipe.liters_of_solution.toFixed(2)} L`
+                    : machinery
+                      ? `${((machinery.tank_capacity_liters || 0) * recipe.capacity_used_percent) / 100} L`
+                      : "N/A"}
+                </span>
+              </div>
             </div>
           </div>
 
