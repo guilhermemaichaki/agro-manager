@@ -949,12 +949,12 @@ export default function ApplicationDetailPage() {
     );
   }
 
-  const applicationProducts = (application.application_products || []) as Array<{
-    product: Product;
-    dosage: number;
-    dosage_unit: string;
-    quantity_used: number;
-  }>;
+  const applicationProducts = (application.application_products || []).map((ap: any) => ({
+    product: ap.product as Product,
+    dosage: ap.dosage || 0,
+    dosage_unit: ap.dosage_unit || "L/ha",
+    quantity_used: ap.quantity_used || 0,
+  }));
 
   const field = application.field as Field | undefined;
 
