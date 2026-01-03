@@ -190,6 +190,14 @@ export default function ReceitaPraticaPage() {
               </TableBody>
             </Table>
           </div>
+
+          {/* Observações */}
+          {recipe.notes && (
+            <div className="border-t pt-4 mt-4">
+              <p className="text-xs text-muted-foreground font-medium mb-1">Observações:</p>
+              <p className="text-sm text-muted-foreground whitespace-pre-wrap">{recipe.notes}</p>
+            </div>
+          )}
         </CardContent>
       </Card>
 

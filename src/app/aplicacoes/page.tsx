@@ -269,25 +269,31 @@ async function createPracticalRecipe(
     dosage: number;
     quantity_in_recipe: number;
     remaining_quantity: number;
-  }>
+  }>,
+  notes: string | null = null
 ): Promise<PracticalRecipe> {
   // Obter usuário atual (se houver)
   const { data: { user } } = await supabase.auth.getUser();
   const createdBy = user?.id || null;
 
   // Criar a receita prática
+  const insertPayload: any = {
+    application_id: applicationId,
+    machinery_id: machineryId,
+    capacity_used_percent: capacityUsedPercent,
+    application_rate_liters_per_hectare: applicationRate,
+    liters_of_solution: litersOfSolution,
+    area_hectares: areaHectares,
+    multiplier: multiplier,
+    created_by: createdBy,
+  };
+  // Só adiciona notes se não for null/undefined (temporário até migration ser executada)
+  if (notes !== null && notes !== undefined && notes !== "") {
+    insertPayload.notes = notes;
+  }
   const { data: recipe, error: recipeError } = await supabase
     .from("practical_recipes")
-    .insert({
-      application_id: applicationId,
-      machinery_id: machineryId,
-      capacity_used_percent: capacityUsedPercent,
-      application_rate_liters_per_hectare: applicationRate,
-      liters_of_solution: litersOfSolution,
-      area_hectares: areaHectares,
-      multiplier: multiplier,
-      created_by: createdBy,
-    })
+    .insert(insertPayload)
     .select()
     .single();
 
@@ -347,19 +353,25 @@ async function updatePracticalRecipe(
     dosage: number;
     quantity_in_recipe: number;
     remaining_quantity: number;
-  }>
+  }>,
+  notes: string | null = null
 ): Promise<PracticalRecipe> {
   // Atualizar a receita prática
+  const updatePayload: any = {
+    machinery_id: machineryId,
+    capacity_used_percent: capacityUsedPercent,
+    application_rate_liters_per_hectare: applicationRate,
+    liters_of_solution: litersOfSolution,
+    area_hectares: areaHectares,
+    multiplier: multiplier,
+  };
+  // Só adiciona notes se não for null/undefined (temporário até migration ser executada)
+  if (notes !== null && notes !== undefined && notes !== "") {
+    updatePayload.notes = notes;
+  }
   const { data: updatedRecipe, error: recipeError } = await supabase
     .from("practical_recipes")
-    .update({
-      machinery_id: machineryId,
-      capacity_used_percent: capacityUsedPercent,
-      application_rate_liters_per_hectare: applicationRate,
-      liters_of_solution: litersOfSolution,
-      area_hectares: areaHectares,
-      multiplier: multiplier,
-    })
+    .update(updatePayload)
     .eq("id", recipeId)
     .select()
     .single();
@@ -678,6 +690,7 @@ async function checkStockAvailability(applicationId: string, applicationProducts
 
 // Função para atualizar aplicação
 async function updateApplication(data: UpdateApplicationInput): Promise<Application> {
+  // Extrair id e products explicitamente usando destructuring para garantir que não sejam incluídos no updatePayload
   const { id, products, ...updateData } = data;
 
   // Buscar aplicação atual para verificar status anterior
@@ -686,7 +699,9 @@ async function updateApplication(data: UpdateApplicationInput): Promise<Applicat
     .select(`
       *,
       application_products:application_products(
+        *,
         product_id,
+        dosage,
         quantity_used
       )
     `)
@@ -722,23 +737,73 @@ async function updateApplication(data: UpdateApplicationInput): Promise<Applicat
     if (statusValue === "cancelled" || statusValue === "canceled") statusValue = "CANCELED";
   }
 
-  const updatePayload: Record<string, any> = {};
+  // Construir updatePayload apenas com campos permitidos (sem products ou id)
+  const updatePayload: {
+    name?: string;
+    harvest_year_id?: string;
+    field_id?: string;
+    field_crop_id?: string | null;
+    application_date?: string;
+    status?: string;
+    notes?: string | null;
+    is_partial?: boolean;
+    partial_area?: number | null;
+    updated_at: string;
+  } = {
+    updated_at: new Date().toISOString(),
+  };
+  
   if (updateData.name !== undefined) updatePayload.name = updateData.name;
   if (updateData.harvest_year_id !== undefined) updatePayload.harvest_year_id = updateData.harvest_year_id;
   if (updateData.field_id !== undefined) updatePayload.field_id = updateData.field_id;
   if (updateData.field_crop_id !== undefined) updatePayload.field_crop_id = updateData.field_crop_id || null;
-  if (updateData.application_date !== undefined)
-    updatePayload.application_date = updateData.application_date;
+  if (updateData.application_date !== undefined) updatePayload.application_date = updateData.application_date;
   if (statusValue !== undefined) updatePayload.status = statusValue;
   if (updateData.notes !== undefined) updatePayload.notes = updateData.notes || null;
   if (updateData.is_partial !== undefined) updatePayload.is_partial = updateData.is_partial;
   if (updateData.partial_area !== undefined) updatePayload.partial_area = updateData.partial_area || null;
-  updatePayload.updated_at = new Date().toISOString();
 
-  // 1. Atualizar aplicação
+  // 1. Atualizar aplicação - Construir objeto manualmente SEM products ou id
+  // Usar uma lista explícita de campos permitidos para garantir que nada mais seja incluído
+  const allowedFields = [
+    'name',
+    'harvest_year_id',
+    'field_id',
+    'field_crop_id',
+    'application_date',
+    'status',
+    'notes',
+    'is_partial',
+    'partial_area',
+    'updated_at'
+  ] as const;
+  
+  const finalPayload: Record<string, any> = {
+    updated_at: new Date().toISOString(),
+  };
+  
+  // Adicionar apenas campos permitidos que existem em updatePayload
+  for (const field of allowedFields) {
+    if (field === 'updated_at') continue; // já foi adicionado
+    if (field === 'status' && statusValue !== undefined) {
+      finalPayload[field] = statusValue;
+    } else if (updatePayload[field] !== undefined) {
+      finalPayload[field] = updatePayload[field];
+    }
+  }
+  
+  // Garantir que products e id NÃO estejam no payload (segurança extra)
+  delete (finalPayload as any).products;
+  delete (finalPayload as any).id;
+  
+  // Criar um novo objeto limpo usando JSON para garantir que não há propriedades ocultas
+  const cleanPayload = JSON.parse(JSON.stringify(finalPayload));
+  delete (cleanPayload as any).products;
+  delete (cleanPayload as any).id;
+  
   const { error: appError } = await supabase
     .from("applications")
-    .update(updatePayload)
+    .update(cleanPayload)
     .eq("id", id);
 
   if (appError) {
@@ -836,7 +901,31 @@ async function deleteApplication(id: string): Promise<void> {
 
 // Função para formatar data
 function formatDate(dateString: string): string {
-  const date = new Date(dateString);
+  if (!dateString) return '';
+  
+  // Sempre parse como local para evitar problemas de timezone
+  // Extrair apenas a parte da data (YYYY-MM-DD) se vier com hora/timezone
+  let dateOnly = dateString;
+  if (dateString.includes('T')) {
+    dateOnly = dateString.split('T')[0];
+  }
+  if (dateString.includes(' ')) {
+    dateOnly = dateString.split(' ')[0];
+  }
+  
+  // Parse como data local (não UTC)
+  const [year, month, day] = dateOnly.split('-').map(Number);
+  if (isNaN(year) || isNaN(month) || isNaN(day)) {
+    // Fallback para new Date se não conseguir parsear
+    const date = new Date(dateString);
+    return date.toLocaleDateString("pt-BR", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    });
+  }
+  
+  const date = new Date(year, month - 1, day); // month é 0-indexed, cria data local
   return date.toLocaleDateString("pt-BR", {
     day: "2-digit",
     month: "2-digit",
@@ -861,8 +950,18 @@ function formatStatus(status: string): string {
 
 // Função para converter data ISO para formato do input
 function formatDateForInput(dateString: string): string {
-  const date = new Date(dateString);
-  return date.toISOString().split("T")[0];
+  // Parse a data como local para evitar problemas de timezone
+  if (dateString.includes('T')) {
+    // Se tem hora, extrair apenas a parte da data
+    const date = new Date(dateString);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  } else {
+    // Se já é só data (YYYY-MM-DD), retornar direto
+    return dateString;
+  }
 }
 
 export default function AplicacoesPage() {
@@ -990,6 +1089,7 @@ export default function AplicacoesPage() {
   const [areaHectares, setAreaHectares] = useState<number>(0);
   const [multiplier, setMultiplier] = useState<number>(1);
   const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
+  const [recipeNotes, setRecipeNotes] = useState<string>("");
 
   // Estados para edição de receita prática
   const [isEditRecipeDialogOpen, setIsEditRecipeDialogOpen] = useState(false);
@@ -1001,6 +1101,7 @@ export default function AplicacoesPage() {
   const [editLitersOfSolution, setEditLitersOfSolution] = useState<number>(0);
   const [editAreaHectares, setEditAreaHectares] = useState<number>(0);
   const [editMultiplier, setEditMultiplier] = useState<number>(1);
+  const [editRecipeNotes, setEditRecipeNotes] = useState<string>("");
 
   // Query para buscar maquinários - sempre habilitada para garantir que os dados estejam disponíveis
   const { data: machineries = [] } = useQuery({
@@ -1017,7 +1118,14 @@ export default function AplicacoesPage() {
 
   const onSubmit = (data: ApplicationFormValues) => {
     if (editingApplication) {
-      updateMutation.mutate({ id: editingApplication.id, ...data });
+      // Criar objeto de update sem products no spread
+      const { products, ...dataWithoutProducts } = data;
+      const updateData: UpdateApplicationInput = {
+        id: editingApplication.id,
+        ...dataWithoutProducts,
+        products: products, // Incluir products separadamente para que updateApplication possa processá-lo
+      };
+      updateMutation.mutate(updateData);
     } else {
       createMutation.mutate(data);
     }
@@ -1033,13 +1141,15 @@ export default function AplicacoesPage() {
     if (statusValue === "CANCELED") statusValue = "cancelled";
 
     // Prepara produtos
-    const applicationProducts = (application.application_products || []).map((ap) => ({
-      product_id: ap.product_id,
-      dosage: ap.dosage,
-      dosage_unit: "L/ha" as const, // Default, pode ser ajustado se houver no banco
-      quantity_used: ap.quantity_used,
-      cost: 0, // Será calculado automaticamente se necessário
-    }));
+    const applicationProducts = (application.application_products || []).map((ap: any) => {
+      return {
+        product_id: ap.product_id,
+        dosage: ap.dosage || 0, // Default para 0 se não existir
+        dosage_unit: (ap.dosage_unit || "L/ha") as "L/ha" | "mL/ha" | "kg/ha", // Default, pode ser ajustado se houver no banco
+        quantity_used: ap.quantity_used || 0,
+        cost: 0, // Será calculado automaticamente se necessário
+      };
+    });
 
     form.reset({
       name: application.name || "",
@@ -1222,6 +1332,7 @@ export default function AplicacoesPage() {
     setEditLitersOfSolution(recipe.liters_of_solution || 0);
     setEditAreaHectares(recipe.area_hectares || 0);
     setEditMultiplier(recipe.multiplier || 1);
+    setEditRecipeNotes(recipe.notes || "");
     setIsEditRecipeDialogOpen(true);
   };
 
@@ -1242,16 +1353,7 @@ export default function AplicacoesPage() {
 
   // Mutation para atualizar receita prática
   const updateRecipeMutation = useMutation({
-    mutationFn: ({
-      recipeId,
-      machineryId,
-      capacityUsedPercent,
-      applicationRate,
-      litersOfSolution,
-      areaHectares,
-      multiplier,
-      products,
-    }: {
+    mutationFn: (params: {
       recipeId: string;
       machineryId: string;
       capacityUsedPercent: number;
@@ -1265,7 +1367,8 @@ export default function AplicacoesPage() {
         quantity_in_recipe: number;
         remaining_quantity: number;
       }>;
-    }) => updatePracticalRecipe(recipeId, machineryId, capacityUsedPercent, applicationRate, litersOfSolution, areaHectares, multiplier, products),
+      notes?: string | null;
+    }) => updatePracticalRecipe(params.recipeId, params.machineryId, params.capacityUsedPercent, params.applicationRate, params.litersOfSolution, params.areaHectares, params.multiplier, params.products, params.notes || null),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["practical_recipes"] });
       if (viewRecipesApplication) {
@@ -2116,7 +2219,7 @@ export default function AplicacoesPage() {
 
       {/* Dialog de Gerar Receita Prática */}
       <Dialog open={isRecipeDialogOpen} onOpenChange={setIsRecipeDialogOpen}>
-        <DialogContent className="max-w-[95vw] max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-[95vw] min-w-[1400px] max-h-[90vh] overflow-y-auto w-[95vw]">
           <DialogHeader>
             <DialogTitle>Gerar Receita Prática</DialogTitle>
             <DialogDescription>
@@ -2355,8 +2458,8 @@ export default function AplicacoesPage() {
                 areaHectares > 0 && (
                   <div className="space-y-4 border-t pt-4">
                     <h3 className="text-lg font-semibold">Produtos da Aplicação</h3>
-                    <div className="overflow-x-auto">
-                      <Table>
+                    <div className="overflow-x-auto w-full">
+                      <Table className="w-full min-w-full">
                         <TableHeader>
                           <TableRow>
                             <TableHead className="w-12">Incluir</TableHead>
@@ -2436,6 +2539,18 @@ export default function AplicacoesPage() {
                   </div>
                 )}
 
+              {/* Campo de Observações */}
+              <div className="space-y-4 border-t pt-4">
+                <Label htmlFor="recipe-notes">Observações (Opcional)</Label>
+                <Textarea
+                  id="recipe-notes"
+                  placeholder="Adicione observações sobre esta receita prática (opcional)"
+                  value={recipeNotes}
+                  onChange={(e) => setRecipeNotes(e.target.value)}
+                  rows={3}
+                />
+              </div>
+
               <DialogFooter>
                 <Button
                   variant="outline"
@@ -2450,6 +2565,7 @@ export default function AplicacoesPage() {
                     setAreaHectares(0);
                     setMultiplier(1);
                     setSelectedProducts(new Set());
+                    setRecipeNotes("");
                   }}
                 >
                   Cancelar
@@ -2521,7 +2637,8 @@ export default function AplicacoesPage() {
                         calculationMode === "liters" ? litersOfSolution : null,
                         calculationMode === "area" ? areaHectares : null,
                         multiplier,
-                        productsToSave
+                        productsToSave,
+                        recipeNotes || null
                       );
 
                       queryClient.invalidateQueries({ queryKey: ["practical_recipes"] });
@@ -3022,6 +3139,7 @@ export default function AplicacoesPage() {
                         areaHectares: editCalculationMode === "area" ? editAreaHectares : null,
                         multiplier: editMultiplier,
                         products: productsToSave,
+                        notes: editRecipeNotes || null,
                       });
                     } catch (error: any) {
                       alert(`Erro ao atualizar receita prática: ${error.message}`);

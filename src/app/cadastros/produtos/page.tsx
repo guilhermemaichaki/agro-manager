@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { Plus, Pencil, Trash2, ArrowDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -31,6 +31,13 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -42,11 +49,11 @@ import { CategorySelector } from "@/components/category-selector";
 // Schema de validação
 const productSchema = z.object({
   name: z.string().min(1, "Nome é obrigatório"),
-  company: z.string().min(1, "Empresa é obrigatória"),
-  active_principle: z.string().min(1, "Princípio ativo é obrigatório"),
-  unit: z.string().min(1, "Unidade é obrigatória"),
-  description: z.string().optional(),
   category_ids: z.array(z.string()).optional(),
+  active_principle: z.string().optional(),
+  unit: z.enum(["Kg", "L"]),
+  company: z.string().min(1, "Empresa é obrigatória"),
+  description: z.string().optional(),
 });
 
 type ProductFormValues = z.infer<typeof productSchema>;
@@ -223,6 +230,8 @@ async function deleteProduct(id: string): Promise<void> {
 export default function ProdutosPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [sortColumn, setSortColumn] = useState<string | null>(null);
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const queryClient = useQueryClient();
 
   // Query para buscar produtos
@@ -273,11 +282,11 @@ export default function ProdutosPage() {
     resolver: zodResolver(productSchema),
     defaultValues: {
       name: "",
-      company: "",
-      active_principle: "",
-      unit: "",
-      description: "",
       category_ids: [],
+      active_principle: "",
+      unit: "L",
+      company: "",
+      description: "",
     },
   });
 
@@ -298,11 +307,11 @@ export default function ProdutosPage() {
 
     form.reset({
       name: product.name,
-      company: product.company,
-      active_principle: product.active_principle,
-      unit: product.unit,
-      description: product.description || "",
       category_ids: categoryIds,
+      active_principle: product.active_principle || "",
+      unit: (product.unit === "Kg" || product.unit === "L") ? product.unit : "L",
+      company: product.company,
+      description: product.description || "",
     });
     setIsDialogOpen(true);
   };
@@ -321,11 +330,68 @@ export default function ProdutosPage() {
     }
   };
 
+  // Função para ordenação
+  const handleSort = (column: string) => {
+    if (sortColumn === column) {
+      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
+    } else {
+      setSortColumn(column);
+      setSortDirection("asc");
+    }
+  };
+
+  // Produtos ordenados
+  const sortedProducts = useMemo(() => {
+    if (!sortColumn) return products;
+
+    return [...products].sort((a, b) => {
+      let aValue: any;
+      let bValue: any;
+
+      switch (sortColumn) {
+        case "name":
+          aValue = a.name?.toLowerCase() || "";
+          bValue = b.name?.toLowerCase() || "";
+          break;
+        case "category":
+          aValue = a.categories && a.categories.length > 0 
+            ? a.categories.map(c => c.name).join(", ").toLowerCase() 
+            : "";
+          bValue = b.categories && b.categories.length > 0 
+            ? b.categories.map(c => c.name).join(", ").toLowerCase() 
+            : "";
+          break;
+        case "active_principle":
+          aValue = (a.active_principle || "").toLowerCase();
+          bValue = (b.active_principle || "").toLowerCase();
+          break;
+        case "unit":
+          aValue = (a.unit || "").toLowerCase();
+          bValue = (b.unit || "").toLowerCase();
+          break;
+        case "company":
+          aValue = (a.company || "").toLowerCase();
+          bValue = (b.company || "").toLowerCase();
+          break;
+        case "description":
+          aValue = (a.description || "").toLowerCase();
+          bValue = (b.description || "").toLowerCase();
+          break;
+        default:
+          return 0;
+      }
+
+      if (aValue < bValue) return sortDirection === "asc" ? -1 : 1;
+      if (aValue > bValue) return sortDirection === "asc" ? 1 : -1;
+      return 0;
+    });
+  }, [products, sortColumn, sortDirection]);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Produtos</h1>
+          <h1 className="text-3xl font-bold tracking-tight">Cadastro de produtos</h1>
           <p className="text-muted-foreground">
             Gerencie os defensivos agrícolas cadastrados
           </p>
@@ -365,12 +431,16 @@ export default function ProdutosPage() {
                 />
                 <FormField
                   control={form.control}
-                  name="company"
+                  name="category_ids"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Empresa</FormLabel>
+                      <FormLabel>Categoria</FormLabel>
                       <FormControl>
-                        <Input placeholder="Ex: Bayer" {...field} />
+                        <CategorySelector
+                          value={field.value || []}
+                          onChange={field.onChange}
+                          error={form.formState.errors.category_ids?.message}
+                        />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -381,7 +451,7 @@ export default function ProdutosPage() {
                   name="active_principle"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Princípio Ativo</FormLabel>
+                      <FormLabel>Princípio Ativo (Opcional)</FormLabel>
                       <FormControl>
                         <Input placeholder="Ex: Glifosato" {...field} />
                       </FormControl>
@@ -395,12 +465,30 @@ export default function ProdutosPage() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Unidade</FormLabel>
+                      <Select onValueChange={field.onChange} value={field.value}>
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Selecione a unidade" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="Kg">Kg</SelectItem>
+                          <SelectItem value="L">L</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="company"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Empresa</FormLabel>
                       <FormControl>
-                        <Input placeholder="Ex: L, kg" {...field} />
+                        <Input placeholder="Ex: Bayer" {...field} />
                       </FormControl>
-                      <FormDescription>
-                        Unidade de medida (litros, quilogramas, etc.)
-                      </FormDescription>
                       <FormMessage />
                     </FormItem>
                   )}
@@ -413,25 +501,8 @@ export default function ProdutosPage() {
                       <FormLabel>Descrição (Opcional)</FormLabel>
                       <FormControl>
                         <Input
-                          placeholder="Ex: Herbicida não seletivo"
+                          placeholder="Descreva informações relevantes sobre o produto"
                           {...field}
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="category_ids"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Categoria</FormLabel>
-                      <FormControl>
-                        <CategorySelector
-                          value={field.value || []}
-                          onChange={field.onChange}
-                          error={form.formState.errors.category_ids?.message}
                         />
                       </FormControl>
                       <FormMessage />
@@ -486,29 +557,89 @@ export default function ProdutosPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Nome</TableHead>
-                  <TableHead>Empresa</TableHead>
-                  <TableHead>Princípio Ativo</TableHead>
-                  <TableHead>Unidade</TableHead>
-                  <TableHead>Categoria</TableHead>
-                  <TableHead>Descrição</TableHead>
+                  <TableHead 
+                    className="cursor-pointer hover:bg-muted/50"
+                    onClick={() => handleSort("name")}
+                  >
+                    <div className="flex items-center gap-1">
+                      Nome
+                      {sortColumn === "name" && (
+                        <ArrowDown className={`h-3 w-3 text-muted-foreground ${sortDirection === "asc" ? "rotate-180" : ""}`} />
+                      )}
+                    </div>
+                  </TableHead>
+                  <TableHead 
+                    className="cursor-pointer hover:bg-muted/50"
+                    onClick={() => handleSort("category")}
+                  >
+                    <div className="flex items-center gap-1">
+                      Categoria
+                      {sortColumn === "category" && (
+                        <ArrowDown className={`h-3 w-3 text-muted-foreground ${sortDirection === "asc" ? "rotate-180" : ""}`} />
+                      )}
+                    </div>
+                  </TableHead>
+                  <TableHead 
+                    className="cursor-pointer hover:bg-muted/50"
+                    onClick={() => handleSort("active_principle")}
+                  >
+                    <div className="flex items-center gap-1">
+                      Princípio Ativo
+                      {sortColumn === "active_principle" && (
+                        <ArrowDown className={`h-3 w-3 text-muted-foreground ${sortDirection === "asc" ? "rotate-180" : ""}`} />
+                      )}
+                    </div>
+                  </TableHead>
+                  <TableHead 
+                    className="cursor-pointer hover:bg-muted/50"
+                    onClick={() => handleSort("unit")}
+                  >
+                    <div className="flex items-center gap-1">
+                      Unidade
+                      {sortColumn === "unit" && (
+                        <ArrowDown className={`h-3 w-3 text-muted-foreground ${sortDirection === "asc" ? "rotate-180" : ""}`} />
+                      )}
+                    </div>
+                  </TableHead>
+                  <TableHead 
+                    className="cursor-pointer hover:bg-muted/50"
+                    onClick={() => handleSort("company")}
+                  >
+                    <div className="flex items-center gap-1">
+                      Empresa
+                      {sortColumn === "company" && (
+                        <ArrowDown className={`h-3 w-3 text-muted-foreground ${sortDirection === "asc" ? "rotate-180" : ""}`} />
+                      )}
+                    </div>
+                  </TableHead>
+                  <TableHead 
+                    className="cursor-pointer hover:bg-muted/50"
+                    onClick={() => handleSort("description")}
+                  >
+                    <div className="flex items-center gap-1">
+                      Descrição
+                      {sortColumn === "description" && (
+                        <ArrowDown className={`h-3 w-3 text-muted-foreground ${sortDirection === "asc" ? "rotate-180" : ""}`} />
+                      )}
+                    </div>
+                  </TableHead>
                   <TableHead className="text-right">Ações</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {products.map((product) => (
+                {sortedProducts.map((product) => (
                   <TableRow key={product.id}>
                     <TableCell className="font-medium">
                       {product.name}
                     </TableCell>
-                    <TableCell>{product.company}</TableCell>
-                    <TableCell>{product.active_principle}</TableCell>
-                    <TableCell>{product.unit}</TableCell>
                     <TableCell>
                       {product.categories && product.categories.length > 0
                         ? product.categories.map((cat) => cat.name).join(", ")
                         : "-"}
                     </TableCell>
+                    <TableCell>{product.active_principle || "-"}</TableCell>
+                    <TableCell>{product.unit}</TableCell>
+                    <TableCell>{product.company}</TableCell>
                     <TableCell className="text-muted-foreground">
                       {product.description || "-"}
                     </TableCell>

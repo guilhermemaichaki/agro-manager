@@ -298,6 +298,7 @@ export interface PracticalRecipe {
   liters_of_solution?: number; // Litros de calda definidos
   area_hectares?: number; // Área em hectares calculada
   multiplier: number; // Quantas vezes aplicar essa receita
+  notes?: string; // Observações sobre a receita prática
   created_at: string;
   created_by: string;
   // Relations

@@ -328,25 +328,31 @@ async function createPracticalRecipe(
     dosage: number;
     quantity_in_recipe: number;
     remaining_quantity: number;
-  }>
+  }>,
+  notes: string | null = null
 ): Promise<PracticalRecipe> {
   const {
     data: { user },
   } = await supabase.auth.getUser();
   const createdBy = user?.id || null;
 
+  const insertPayload: any = {
+    application_id: applicationId,
+    machinery_id: machineryId,
+    capacity_used_percent: capacityUsedPercent,
+    application_rate_liters_per_hectare: applicationRate,
+    liters_of_solution: litersOfSolution,
+    area_hectares: areaHectares,
+    multiplier: multiplier,
+    created_by: createdBy,
+  };
+  // Só adiciona notes se não for null/undefined (temporário até migration ser executada)
+  if (notes !== null && notes !== undefined && notes !== "") {
+    insertPayload.notes = notes;
+  }
   const { data: recipe, error: recipeError } = await supabase
     .from("practical_recipes")
-    .insert({
-      application_id: applicationId,
-      machinery_id: machineryId,
-      capacity_used_percent: capacityUsedPercent,
-      application_rate_liters_per_hectare: applicationRate,
-      liters_of_solution: litersOfSolution,
-      area_hectares: areaHectares,
-      multiplier: multiplier,
-      created_by: createdBy,
-    })
+    .insert(insertPayload)
     .select()
     .single();
 
@@ -405,16 +411,21 @@ async function updatePracticalRecipe(
   }>
 ): Promise<PracticalRecipe> {
   // Atualizar a receita prática
+  const updatePayload: any = {
+    machinery_id: machineryId,
+    capacity_used_percent: capacityUsedPercent,
+    application_rate_liters_per_hectare: applicationRate,
+    liters_of_solution: litersOfSolution,
+    area_hectares: areaHectares,
+    multiplier: multiplier,
+  };
+  // Só adiciona notes se não for null/undefined (temporário até migration ser executada)
+  if (notes !== null && notes !== undefined && notes !== "") {
+    updatePayload.notes = notes;
+  }
   const { data: updatedRecipe, error: recipeError } = await supabase
     .from("practical_recipes")
-    .update({
-      machinery_id: machineryId,
-      capacity_used_percent: capacityUsedPercent,
-      application_rate_liters_per_hectare: applicationRate,
-      liters_of_solution: litersOfSolution,
-      area_hectares: areaHectares,
-      multiplier: multiplier,
-    })
+    .update(updatePayload)
     .eq("id", recipeId)
     .select()
     .single();
@@ -499,14 +510,109 @@ async function deletePracticalRecipe(recipeId: string): Promise<void> {
 // Função para atualizar aplicação
 async function updateApplication(data: {
   id: string;
+  name?: string;
+  harvest_year_id?: string;
+  field_id?: string;
+  field_crop_id?: string;
+  application_date?: string;
   status?: string;
+  notes?: string;
+  is_partial?: boolean;
+  partial_area?: number;
+  products?: Array<{
+    product_id: string;
+    dosage: number;
+    dosage_unit: string;
+    quantity_used: number;
+    cost?: number;
+  }>;
 }): Promise<Application> {
-  const { id, ...updateData } = data;
+  // Extrair id e products explicitamente
+  const { id, products, ...updateData } = data;
 
-  const { data: updatedApplication, error } = await supabase
+  // Normalizar status para o formato do banco de dados (maiúsculas)
+  let statusValue = updateData.status;
+  if (statusValue) {
+    if (statusValue === "planned") statusValue = "PLANNED";
+    if (statusValue === "completed" || statusValue === "done") statusValue = "DONE";
+    if (statusValue === "cancelled" || statusValue === "canceled") statusValue = "CANCELED";
+  }
+
+  // Construir payload apenas com campos permitidos (sem products ou id)
+  const allowedFields = [
+    'name',
+    'harvest_year_id',
+    'field_id',
+    'field_crop_id',
+    'application_date',
+    'status',
+    'notes',
+    'is_partial',
+    'partial_area',
+    'updated_at'
+  ] as const;
+  
+  const cleanPayload: Record<string, any> = {
+    updated_at: new Date().toISOString(),
+  };
+  
+  // Adicionar apenas campos permitidos que existem em updateData
+  for (const field of allowedFields) {
+    if (field === 'updated_at') continue; // já foi adicionado
+    if (field === 'status' && statusValue !== undefined) {
+      cleanPayload[field] = statusValue;
+    } else if (updateData[field] !== undefined) {
+      cleanPayload[field] = updateData[field];
+    }
+  }
+  
+  // Garantir que products e id NÃO estejam no payload
+  delete (cleanPayload as any).products;
+  delete (cleanPayload as any).id;
+
+  // 1. Atualizar aplicação
+  const { error: appError } = await supabase
     .from("applications")
-    .update(updateData)
-    .eq("id", id)
+    .update(cleanPayload)
+    .eq("id", id);
+
+  if (appError) {
+    throw new Error(`Erro ao atualizar aplicação: ${appError.message}`);
+  }
+
+  // 2. Se produtos foram fornecidos, atualizar lista de produtos
+  if (products && products.length > 0) {
+    // Deletar produtos antigos
+    const { error: deleteError } = await supabase
+      .from("application_products")
+      .delete()
+      .eq("application_id", id);
+
+    if (deleteError) {
+      throw new Error(`Erro ao deletar produtos antigos: ${deleteError.message}`);
+    }
+
+    // Inserir novos produtos (apenas com as colunas que existem na tabela)
+    const applicationProducts = products.map((product) => ({
+      application_id: id,
+      product_id: product.product_id,
+      dosage: product.dosage,
+      quantity_used: product.quantity_used,
+      // dosage_unit e cost não existem na tabela application_products
+    }));
+
+    const { error: productsError } = await supabase
+      .from("application_products")
+      .insert(applicationProducts);
+
+    if (productsError) {
+      throw new Error(`Erro ao atualizar produtos: ${productsError.message}`);
+    }
+  }
+
+  // 3. Buscar aplicação atualizada
+  const { data: updatedApplication, error: fetchError } = await supabase
+    .from("applications")
     .select(`
       *,
       field:fields(*),
@@ -516,10 +622,11 @@ async function updateApplication(data: {
         product:products(*)
       )
     `)
+    .eq("id", id)
     .single();
 
-  if (error) {
-    throw new Error(`Erro ao atualizar aplicação: ${error.message}`);
+  if (fetchError || !updatedApplication) {
+    throw new Error(`Erro ao buscar aplicação atualizada: ${fetchError?.message || "Aplicação não encontrada"}`);
   }
 
   return updatedApplication as Application;
@@ -537,7 +644,31 @@ async function deleteApplication(id: string): Promise<void> {
 
 // Função para formatar data
 function formatDate(dateString: string): string {
-  const date = new Date(dateString);
+  if (!dateString) return '';
+  
+  // Sempre parse como local para evitar problemas de timezone
+  // Extrair apenas a parte da data (YYYY-MM-DD) se vier com hora/timezone
+  let dateOnly = dateString;
+  if (dateString.includes('T')) {
+    dateOnly = dateString.split('T')[0];
+  }
+  if (dateString.includes(' ')) {
+    dateOnly = dateString.split(' ')[0];
+  }
+  
+  // Parse como data local (não UTC)
+  const [year, month, day] = dateOnly.split('-').map(Number);
+  if (isNaN(year) || isNaN(month) || isNaN(day)) {
+    // Fallback para new Date se não conseguir parsear
+    const date = new Date(dateString);
+    return date.toLocaleDateString("pt-BR", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    });
+  }
+  
+  const date = new Date(year, month - 1, day); // month é 0-indexed, cria data local
   return date.toLocaleDateString("pt-BR", {
     day: "2-digit",
     month: "2-digit",
@@ -546,8 +677,18 @@ function formatDate(dateString: string): string {
 }
 
 function formatDateForInput(dateString: string): string {
-  const date = new Date(dateString);
-  return date.toISOString().split("T")[0];
+  // Parse a data como local para evitar problemas de timezone
+  if (dateString.includes('T')) {
+    // Se tem hora, extrair apenas a parte da data
+    const date = new Date(dateString);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  } else {
+    // Se já é só data (YYYY-MM-DD), retornar direto
+    return dateString;
+  }
 }
 
 export default function ApplicationDetailPage() {
@@ -568,6 +709,7 @@ export default function ApplicationDetailPage() {
   const [multiplier, setMultiplier] = useState(1);
   const [dosageInputs, setDosageInputs] = useState<Record<number, string>>({});
   const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
+  const [recipeNotes, setRecipeNotes] = useState<string>("");
 
   // Query para buscar aplicação
   const { data: application, isLoading, error } = useQuery({
@@ -763,6 +905,7 @@ export default function ApplicationDetailPage() {
   const updateMutation = useMutation({
     mutationFn: updateApplication,
     onSuccess: () => {
+      setIsDialogOpen(false);
       queryClient.invalidateQueries({ queryKey: ["application", applicationId] });
       queryClient.invalidateQueries({ queryKey: ["applications"] });
     },
@@ -799,6 +942,7 @@ export default function ApplicationDetailPage() {
         quantity_in_recipe: number;
         remaining_quantity: number;
       }>;
+      notes: string | null;
     }) => {
       return createPracticalRecipe(
         params.applicationId,
@@ -808,7 +952,8 @@ export default function ApplicationDetailPage() {
         params.litersOfSolution,
         params.areaHectares,
         params.multiplier,
-        params.products
+        params.products,
+        params.notes
       );
     },
     onSuccess: (newRecipe) => {
@@ -1007,14 +1152,6 @@ export default function ApplicationDetailPage() {
             Marcar como Realizado
           </Button>
         )}
-        <Button
-          variant="outline"
-          disabled
-          className="bg-gray-50 hover:bg-gray-100 text-gray-500 border-gray-200"
-        >
-          <FileBarChart className="h-4 w-4 mr-2" />
-          Relatório de carregamento
-        </Button>
         <Button variant="ghost" size="icon" onClick={handleEdit}>
           <Pencil className="h-4 w-4" />
         </Button>
@@ -1606,7 +1743,7 @@ export default function ApplicationDetailPage() {
 
       {/* Dialog de Gerar Receita Prática */}
       <Dialog open={isRecipeDialogOpen} onOpenChange={setIsRecipeDialogOpen}>
-        <DialogContent className="max-w-[95vw] max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-[95vw] min-w-[1400px] max-h-[90vh] overflow-y-auto w-[95vw]">
           <DialogHeader>
             <DialogTitle>Gerar Receita Prática</DialogTitle>
             <DialogDescription>
@@ -1841,8 +1978,8 @@ export default function ApplicationDetailPage() {
               {applicationProducts.length > 0 && areaHectares > 0 && (
                 <div className="space-y-4 border-t pt-4">
                   <h3 className="text-lg font-semibold">Produtos da Aplicação</h3>
-                  <div className="overflow-x-auto">
-                    <Table>
+                  <div className="overflow-x-auto w-full">
+                    <Table className="w-full min-w-full">
                       <TableHeader>
                         <TableRow>
                           <TableHead className="w-12">Incluir</TableHead>
@@ -1917,9 +2054,21 @@ export default function ApplicationDetailPage() {
                         })}
                       </TableBody>
                     </Table>
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
+
+              {/* Campo de Observações */}
+              <div className="space-y-4 border-t pt-4">
+                <Label htmlFor="recipe-notes">Observações (Opcional)</Label>
+                <Textarea
+                  id="recipe-notes"
+                  placeholder="Adicione observações sobre esta receita prática (opcional)"
+                  value={recipeNotes}
+                  onChange={(e) => setRecipeNotes(e.target.value)}
+                  rows={3}
+                />
+              </div>
 
               <DialogFooter>
                 <Button
@@ -1934,6 +2083,7 @@ export default function ApplicationDetailPage() {
                     setAreaHectares(0);
                     setMultiplier(1);
                     setSelectedProducts(new Set());
+                    setRecipeNotes("");
                   }}
                 >
                   Cancelar
@@ -2004,6 +2154,7 @@ export default function ApplicationDetailPage() {
                         areaHectares: calculationMode === "area" ? areaHectares : null,
                         multiplier,
                         products: productsToSave,
+                        notes: recipeNotes || null,
                       });
                     } catch (error: any) {
                       alert(`Erro ao gerar receita prática: ${error.message}`);
@@ -2021,7 +2172,7 @@ export default function ApplicationDetailPage() {
 
       {/* Dialog para Ver Receitas Práticas */}
       <Dialog open={isViewRecipesDialogOpen} onOpenChange={setIsViewRecipesDialogOpen}>
-        <DialogContent className="max-w-[95vw] max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-[95vw] min-w-[1200px] max-h-[90vh] overflow-y-auto w-[95vw]">
           <DialogHeader>
             <DialogTitle>Receitas Práticas</DialogTitle>
             <DialogDescription asChild>
@@ -2122,6 +2273,19 @@ export default function ApplicationDetailPage() {
                   </TableBody>
                 </Table>
               )}
+            </div>
+
+            {/* Botão Relatório de Carregamento */}
+            <div className="pt-4 border-t">
+              <Link href={`/aplicacoes/${applicationId}/carregamento`}>
+                <Button
+                  variant="outline"
+                  className="w-full bg-gray-50 hover:bg-gray-100 text-gray-700 border-gray-200"
+                >
+                  <FileBarChart className="h-4 w-4 mr-2" />
+                  Relatório de carregamento
+                </Button>
+              </Link>
             </div>
           </div>
         </DialogContent>
