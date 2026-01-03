@@ -123,7 +123,7 @@ async function createProduct(data: CreateProductInput): Promise<Product> {
     .insert({
       name: productData.name,
       company: productData.company,
-      active_principle: productData.active_principle,
+      active_principle: productData.active_principle || null,
       unit: productData.unit,
       description: productData.description || null,
     } as any)

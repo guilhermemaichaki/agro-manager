@@ -361,7 +361,7 @@ export interface ProductStockSummary {
 export interface CreateProductInput {
   name: string;
   company: string;
-  active_principle: string;
+  active_principle?: string;
   unit: string;
   description?: string;
   category_ids?: string[];
