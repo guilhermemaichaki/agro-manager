@@ -408,7 +408,8 @@ async function updatePracticalRecipe(
     dosage: number;
     quantity_in_recipe: number;
     remaining_quantity: number;
-  }>
+  }>,
+  notes: string | null = null
 ): Promise<PracticalRecipe> {
   // Atualizar a receita prática
   const updatePayload: any = {
