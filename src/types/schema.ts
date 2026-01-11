@@ -18,6 +18,14 @@ export enum StockMovementType {
   EXIT = 'exit', // Saída
 }
 
+export enum UserRole {
+  OWNER = 'owner', // Proprietário - controle total
+  ADMIN = 'admin', // Administrador - pode gerenciar usuários e tudo exceto deletar fazenda
+  MANAGER = 'manager', // Gerente - pode criar/editar/visualizar, não pode deletar ou gerenciar usuários
+  OPERATOR = 'operator', // Operador - pode criar aplicações e movimentações, visualizar dados
+  VIEWER = 'viewer', // Visualizador - apenas visualização
+}
+
 // ============================================
 // CORE ENTITIES
 // ============================================
@@ -50,6 +58,52 @@ export interface HarvestCycle {
 }
 
 /**
+ * Perfil de Usuário
+ */
+export interface UserProfile {
+  id: string;
+  email: string;
+  full_name?: string;
+  created_at: string;
+  updated_at?: string;
+}
+
+/**
+ * Membro de Fazenda
+ */
+export interface FarmMember {
+  id: string;
+  farm_id: string;
+  user_id: string;
+  role: UserRole;
+  invited_by?: string;
+  invited_at: string;
+  accepted_at?: string;
+  created_at: string;
+  updated_at?: string;
+  // Relations
+  user?: UserProfile;
+  farm?: Farm;
+}
+
+/**
+ * Convite para Fazenda
+ */
+export interface FarmInvitation {
+  id: string;
+  farm_id: string;
+  email: string;
+  role: UserRole;
+  token: string;
+  invited_by: string;
+  expires_at: string;
+  accepted_at?: string;
+  created_at: string;
+  // Relations
+  farm?: Farm;
+}
+
+/**
  * Fazenda
  */
 export interface Farm {
@@ -58,8 +112,12 @@ export interface Farm {
   city?: string;
   description?: string;
   image_url?: string;
+  owner_id?: string; // Proprietário original
   created_at: string;
   updated_at?: string;
+  // Relations
+  owner?: UserProfile;
+  members?: FarmMember[];
 }
 
 /**
@@ -482,6 +540,26 @@ export type Database = {
         Row: StockMovement;
         Insert: Omit<StockMovement, 'id' | 'created_at'>;
         Update: Partial<Omit<StockMovement, 'id' | 'created_at'>>;
+      };
+      user_profiles: {
+        Row: UserProfile;
+        Insert: Omit<UserProfile, 'id' | 'created_at' | 'updated_at'>;
+        Update: Partial<Omit<UserProfile, 'id' | 'created_at' | 'updated_at'>>;
+      };
+      farm_members: {
+        Row: FarmMember;
+        Insert: Omit<FarmMember, 'id' | 'created_at' | 'updated_at'>;
+        Update: Partial<Omit<FarmMember, 'id' | 'created_at' | 'updated_at'>>;
+      };
+      farm_invitations: {
+        Row: FarmInvitation;
+        Insert: Omit<FarmInvitation, 'id' | 'created_at'>;
+        Update: Partial<Omit<FarmInvitation, 'id' | 'created_at'>>;
+      };
+      farms: {
+        Row: Farm;
+        Insert: Omit<Farm, 'id' | 'created_at' | 'updated_at'>;
+        Update: Partial<Omit<Farm, 'id' | 'created_at' | 'updated_at'>>;
       };
     };
   };

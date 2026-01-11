@@ -114,11 +114,18 @@ async function fetchHarvestYears(farmId: string): Promise<HarvestYear[]> {
 }
 
 async function createFarm(data: CreateFarmInput): Promise<Farm> {
+  // Obter usuário atual
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) {
+    throw new Error("Usuário não autenticado");
+  }
+
   const { data: newFarm, error } = await supabase
     .from("farms")
     .insert({
       name: data.name,
       description: data.description || null,
+      owner_id: user.id,
     } as any)
     .select()
     .single();
@@ -129,6 +136,20 @@ async function createFarm(data: CreateFarmInput): Promise<Farm> {
 
   if (!newFarm) {
     throw new Error("Fazenda não foi criada");
+  }
+
+  // Criar registro de membro como owner
+  const { error: memberError } = await supabase
+    .from("farm_members")
+    .insert({
+      farm_id: newFarm.id,
+      user_id: user.id,
+      role: "owner",
+      accepted_at: new Date().toISOString(),
+    });
+
+  if (memberError) {
+    console.error("Erro ao criar membro da fazenda:", memberError);
   }
 
   return newFarm as Farm;

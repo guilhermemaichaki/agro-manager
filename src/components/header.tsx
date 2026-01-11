@@ -1,25 +1,44 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import { useAppStore } from "@/store/app-store";
+import { useAuth } from "@/contexts/auth-context";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { Plus } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Plus, User, LogOut, Settings } from "lucide-react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { signOut } from "@/lib/auth-helpers";
 import type { Farm, HarvestYear } from "@/types/schema";
 
 async function fetchFarms(): Promise<Farm[]> {
+  // Buscar fazendas através de farm_members
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return [];
+
   const { data, error } = await supabase
-    .from("farms")
-    .select("*")
-    .order("name", { ascending: true });
+    .from("farm_members")
+    .select(`
+      farm:farms(*)
+    `)
+    .eq("user_id", user.id)
+    .not("accepted_at", "is", null)
+    .order("created_at", { ascending: false });
 
   if (error) {
     throw new Error(`Erro ao buscar fazendas: ${error.message}`);
   }
 
-  return data || [];
+  return (data || []).map((item: any) => item.farm).filter(Boolean) as Farm[];
 }
 
 async function fetchHarvestYears(farmId: string | null): Promise<HarvestYear[]> {
@@ -42,25 +61,36 @@ async function fetchHarvestYears(farmId: string | null): Promise<HarvestYear[]> 
 }
 
 export function Header() {
+  const router = useRouter();
+  const { user } = useAuth();
   const {
     selectedFarmId,
     selectedHarvestYearId,
     setSelectedFarmId,
     setSelectedHarvestYearId,
+    currentFarmMember,
   } = useAppStore();
 
   const { data: farms = [], isLoading: isLoadingFarms } = useQuery({
-    queryKey: ["farms"],
+    queryKey: ["user-farms"],
     queryFn: fetchFarms,
+    enabled: !!user,
   });
 
   const { data: harvestYears = [], isLoading: isLoadingHarvestYears } = useQuery({
     queryKey: ["harvest_years", selectedFarmId],
     queryFn: () => fetchHarvestYears(selectedFarmId),
+    enabled: !!selectedFarmId,
   });
 
   const selectedFarm = farms.find((f) => f.id === selectedFarmId);
   const selectedHarvestYear = harvestYears.find((hy) => hy.id === selectedHarvestYearId);
+
+  const handleLogout = async () => {
+    await signOut();
+    router.push("/login");
+    router.refresh();
+  };
 
   return (
     <div className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -123,6 +153,42 @@ export function Header() {
             </Select>
           </div>
         </div>
+
+        {user && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" className="relative h-10 w-10 rounded-full">
+                <User className="h-5 w-5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent className="w-56" align="end" forceMount>
+              <DropdownMenuLabel className="font-normal">
+                <div className="flex flex-col space-y-1">
+                  <p className="text-sm font-medium leading-none">
+                    {user.full_name || "Usuário"}
+                  </p>
+                  <p className="text-xs leading-none text-muted-foreground">
+                    {user.email}
+                  </p>
+                </div>
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {selectedFarm && (currentFarmMember?.role === "owner" || currentFarmMember?.role === "admin") && (
+                <Link href={`/fazendas/${selectedFarm.id}/usuarios`}>
+                  <DropdownMenuItem>
+                    <Settings className="mr-2 h-4 w-4" />
+                    <span>Gerenciar Usuários</span>
+                  </DropdownMenuItem>
+                </Link>
+              )}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={handleLogout}>
+                <LogOut className="mr-2 h-4 w-4" />
+                <span>Sair</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
     </div>
   );
