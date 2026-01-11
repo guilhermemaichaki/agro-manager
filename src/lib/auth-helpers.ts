@@ -49,7 +49,6 @@ export async function getUserFarms(): Promise<Farm[]> {
     .from("farm_members")
     .select("farm:farms(*)")
     .eq("user_id", user.id)
-    .eq("accepted_at", null, { nullComparison: "not" })
     .not("accepted_at", "is", null);
 
   if (error || !data) return [];
