@@ -27,6 +27,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [initialized, setInitialized] = useState(false);
   const initRef = useRef(false);
+  const currentUserIdRef = useRef<string | null>(null);
   
   const {
     setUser: setStoreUser,
@@ -97,6 +98,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setUser(result.userProfile);
             setStoreUser(result.userProfile);
             setUserFarms(result.farms);
+            currentUserIdRef.current = result.userProfile.id;
           }
         } else {
           console.log("[Auth] No session found");
@@ -130,6 +132,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (event === "SIGNED_OUT") {
           console.log("[Auth] User signed out, clearing state");
           setUser(null);
+          currentUserIdRef.current = null;
           clearAuth();
           setLoading(false);
           setInitialized(true);
@@ -138,6 +141,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         
         // Apenas processar SIGNED_IN
         if (event === "SIGNED_IN" && session?.user) {
+          // Proteção: só recarregar se for um usuário diferente ou se não houver usuário carregado
+          if (session.user.id === currentUserIdRef.current && user) {
+            console.log("[Auth] Same user already loaded, skipping data reload");
+            return;
+          }
+          
           console.log("[Auth] User signed in, loading data");
           setLoading(true);
           
@@ -148,6 +157,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               setUser(result.userProfile);
               setStoreUser(result.userProfile);
               setUserFarms(result.farms);
+              currentUserIdRef.current = result.userProfile.id;
             } else if (isMounted) {
               console.warn("[Auth] Failed to load user data, but finishing initialization");
             }
