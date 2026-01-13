@@ -28,6 +28,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [initialized, setInitialized] = useState(false);
   const initRef = useRef(false);
   const currentUserIdRef = useRef<string | null>(null);
+  const isProcessingSignInRef = useRef(false);
+  const isInitInProgressRef = useRef(false);
+  const lastSignInTimeRef = useRef<number>(0);
   
   const {
     setUser: setStoreUser,
@@ -38,6 +41,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     clearAuth,
     checkAndClearForNewUser,
   } = useAppStore();
+  
+  // Usar selector do Zustand para selectedFarmId
+  const selectedFarmId = useAppStore((state) => state.selectedFarmId);
 
   // Função principal para carregar dados do usuário
   async function loadUserData(userId: string) {
@@ -86,6 +92,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     console.log("[Auth] Initializing auth provider");
 
     async function init() {
+      isInitInProgressRef.current = true;
       try {
         const { data: { session } } = await supabase.auth.getSession();
         
@@ -109,6 +116,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (isMounted) {
           setLoading(false);
           setInitialized(true);
+          isInitInProgressRef.current = false;
         }
       }
     }
@@ -141,13 +149,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         
         // Apenas processar SIGNED_IN
         if (event === "SIGNED_IN" && session?.user) {
+          // Ignorar eventos durante a inicialização inicial
+          if (isInitInProgressRef.current) {
+            console.log("[Auth] Init in progress, ignoring SIGNED_IN event");
+            return;
+          }
+          
+          // Proteção contra processamento simultâneo
+          if (isProcessingSignInRef.current) {
+            console.log("[Auth] Already processing SIGNED_IN, skipping duplicate event");
+            return;
+          }
+          
+          // Throttle: ignorar eventos muito próximos (menos de 500ms)
+          const now = Date.now();
+          if (now - lastSignInTimeRef.current < 500) {
+            console.log("[Auth] SIGNED_IN event throttled (too soon after last event)");
+            return;
+          }
+          lastSignInTimeRef.current = now;
+          
           // Proteção: só recarregar se for um usuário diferente ou se não houver usuário carregado
-          if (session.user.id === currentUserIdRef.current && user) {
+          // Usar apenas refs para evitar closure stale
+          if (session.user.id === currentUserIdRef.current && currentUserIdRef.current !== null) {
             console.log("[Auth] Same user already loaded, skipping data reload");
             return;
           }
           
           console.log("[Auth] User signed in, loading data");
+          isProcessingSignInRef.current = true;
           setLoading(true);
           
           try {
@@ -167,6 +197,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (isMounted) {
               setLoading(false);
               setInitialized(true);
+              isProcessingSignInRef.current = false;
             }
           }
         }
@@ -181,7 +212,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Carregar dados do membro quando fazenda mudar
   useEffect(() => {
-    const selectedFarmId = useAppStore.getState().selectedFarmId;
     if (selectedFarmId && user) {
       getFarmMember(selectedFarmId)
         .then(member => setCurrentFarmMember(member))
@@ -189,7 +219,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } else {
       setCurrentFarmMember(null);
     }
-  }, [useAppStore.getState().selectedFarmId, user]);
+  }, [selectedFarmId, user, setCurrentFarmMember]);
 
   return (
     <AuthContext.Provider value={{ user, loading, initialized }}>

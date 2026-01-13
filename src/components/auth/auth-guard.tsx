@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, startTransition } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuth } from "@/contexts/auth-context";
 
@@ -10,38 +10,57 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   const { user, loading, initialized } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
-  const [forceInitialized, setForceInitialized] = useState(false);
-
-  // Timeout de segurança: se após 10 segundos não inicializou, forçar inicialização
-  useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      if (!initialized) {
-        console.warn("AuthGuard: Initialization timeout - forcing initialization");
-        setForceInitialized(true);
-      }
-    }, 10000);
-
-    return () => clearTimeout(timeoutId);
-  }, [initialized]);
+  const hasRedirectedRef = useRef(false);
+  const lastPathnameRef = useRef<string | null>(null);
 
   useEffect(() => {
-    const isInitialized = initialized || forceInitialized;
-    if (!isInitialized || loading) {
+    // Só processar redirecionamentos após inicialização completa
+    if (!initialized || loading) {
       return;
     }
 
+    // Evitar processamento duplicado para o mesmo pathname
+    if (lastPathnameRef.current === pathname && hasRedirectedRef.current) {
+      return;
+    }
+
+    lastPathnameRef.current = pathname;
     const isPublicRoute = publicRoutes.some((route) => pathname?.startsWith(route));
 
+    // Verificação robusta antes de redirecionar
     if (!user && !isPublicRoute) {
-      router.push("/login");
+      // Evitar múltiplos redirecionamentos
+      if (!hasRedirectedRef.current) {
+        hasRedirectedRef.current = true;
+        console.log("[AuthGuard] Redirecting to login - user not authenticated");
+        startTransition(() => {
+          router.push("/login");
+        });
+      }
     } else if (user && pathname === "/login") {
-      router.push("/");
+      // Evitar múltiplos redirecionamentos
+      if (!hasRedirectedRef.current) {
+        hasRedirectedRef.current = true;
+        console.log("[AuthGuard] Redirecting to home - user already authenticated");
+        startTransition(() => {
+          router.push("/");
+        });
+      }
+    } else {
+      // Reset flag quando não há redirecionamento necessário
+      hasRedirectedRef.current = false;
     }
-  }, [user, loading, initialized, forceInitialized, pathname, router]);
+  }, [user, loading, initialized, pathname, router]);
+
+  // Reset redirect flag quando pathname muda
+  useEffect(() => {
+    if (lastPathnameRef.current !== pathname) {
+      hasRedirectedRef.current = false;
+    }
+  }, [pathname]);
 
   // Mostrar loading enquanto verifica autenticação
-  const isInitialized = initialized || forceInitialized;
-  if (!isInitialized || loading) {
+  if (!initialized || loading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <div className="text-center">
