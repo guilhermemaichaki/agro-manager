@@ -64,11 +64,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let isMounted = true;
     
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/67851273-1af3-4d79-b55e-b02d35463fd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-context.tsx:useEffect',message:'AuthProvider mounted',data:{},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
+    
     // Timeout de segurança: se após 8 segundos não inicializou, forçar inicialização
     const timeoutId = setTimeout(async () => {
       if (!hasHandledInitialSessionRef.current && isMounted) {
+        // #region agent log
+        fetch('http://127.0.0.1:7243/ingest/67851273-1af3-4d79-b55e-b02d35463fd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-context.tsx:timeout',message:'TIMEOUT triggered',data:{hasHandled:hasHandledInitialSessionRef.current},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B'})}).catch(()=>{});
+        // #endregion
         console.warn("Auth initialization timeout - forcing initialization");
-        // Se timeout, pode ser sessão corrompida - limpar e continuar
         await clearCorruptedSession();
         setStoreSession(null);
         setUser(null);
@@ -81,15 +87,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // Verificar sessão inicial
     const initializeAuth = async () => {
+      // #region agent log
+      fetch('http://127.0.0.1:7243/ingest/67851273-1af3-4d79-b55e-b02d35463fd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-context.tsx:initializeAuth',message:'Starting initializeAuth',data:{},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+      
       try {
         const { data: { session }, error } = await supabase.auth.getSession();
+        
+        // #region agent log
+        fetch('http://127.0.0.1:7243/ingest/67851273-1af3-4d79-b55e-b02d35463fd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-context.tsx:getSession',message:'Got session result',data:{hasSession:!!session,hasUser:!!session?.user,hasError:!!error,errorMsg:error?.message},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
         
         if (!isMounted) return;
         clearTimeout(timeoutId);
         
         if (error) {
           console.error("Error getting session:", error);
-          // Sessão pode estar corrompida - limpar
           await clearCorruptedSession();
           setStoreSession(null);
           setLoading(false);
@@ -101,17 +114,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setStoreSession(session);
         
         if (session?.user) {
+          // #region agent log
+          fetch('http://127.0.0.1:7243/ingest/67851273-1af3-4d79-b55e-b02d35463fd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-context.tsx:initializeAuth',message:'Calling loadUserData',data:{userId:session.user.id},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
+          // #endregion
           await loadUserData();
         } else {
           setLoading(false);
           setInitialized(true);
         }
         hasHandledInitialSessionRef.current = true;
-      } catch (error) {
+      } catch (error: any) {
+        // #region agent log
+        fetch('http://127.0.0.1:7243/ingest/67851273-1af3-4d79-b55e-b02d35463fd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-context.tsx:initializeAuth',message:'Caught error',data:{error:error?.message},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
+        // #endregion
         if (!isMounted) return;
         clearTimeout(timeoutId);
         console.error("Error initializing auth:", error);
-        // Limpar sessão corrompida
         await clearCorruptedSession();
         setStoreSession(null);
         setLoading(false);
@@ -126,6 +144,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
+      // #region agent log
+      fetch('http://127.0.0.1:7243/ingest/67851273-1af3-4d79-b55e-b02d35463fd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-context.tsx:onAuthStateChange',message:'Auth state changed',data:{event,hasSession:!!session,hasHandled:hasHandledInitialSessionRef.current},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'D'})}).catch(()=>{});
+      // #endregion
+      
       if (!isMounted) return;
       
       setStoreSession(session);
@@ -143,7 +165,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Tratar logout
       if (event === "SIGNED_OUT") {
         setUser(null);
-        clearAuth(); // Limpa todo o store incluindo farmId
+        clearAuth();
         setLoading(false);
         setInitialized(true);
         return;
@@ -181,17 +203,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [selectedFarmId, user]);
 
   async function loadUserData() {
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/67851273-1af3-4d79-b55e-b02d35463fd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-context.tsx:loadUserData',message:'loadUserData called',data:{isAlreadyLoading:isLoadingUserDataRef.current},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'E'})}).catch(()=>{});
+    // #endregion
+    
     // Evitar chamadas duplicadas
     if (isLoadingUserDataRef.current) return;
     isLoadingUserDataRef.current = true;
     
     try {
       setLoading(true);
+      
+      // #region agent log
+      fetch('http://127.0.0.1:7243/ingest/67851273-1af3-4d79-b55e-b02d35463fd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-context.tsx:loadUserData',message:'Getting user profile',data:{},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'E'})}).catch(()=>{});
+      // #endregion
+      
       const userProfile = await getCurrentUserProfile();
       
+      // #region agent log
+      fetch('http://127.0.0.1:7243/ingest/67851273-1af3-4d79-b55e-b02d35463fd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-context.tsx:loadUserData',message:'Got user profile',data:{hasProfile:!!userProfile,profileId:userProfile?.id},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'E'})}).catch(()=>{});
+      // #endregion
+      
       if (userProfile) {
-        // Verificar se é um usuário diferente do anterior
-        // Se for, limpa as seleções para evitar ver dados de outro usuário
         const userChanged = checkAndClearForNewUser(userProfile.id);
         if (userChanged) {
           console.log("User changed - cleared previous selections");
@@ -204,12 +237,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
           farms = await getUserFarms();
           setUserFarms(farms);
-        } catch (farmsError) {
+          // #region agent log
+          fetch('http://127.0.0.1:7243/ingest/67851273-1af3-4d79-b55e-b02d35463fd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-context.tsx:loadUserData',message:'Got farms',data:{farmCount:farms.length},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'E'})}).catch(()=>{});
+          // #endregion
+        } catch (farmsError: any) {
           console.error("Error loading farms:", farmsError);
+          // #region agent log
+          fetch('http://127.0.0.1:7243/ingest/67851273-1af3-4d79-b55e-b02d35463fd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-context.tsx:loadUserData',message:'Error loading farms',data:{error:farmsError?.message},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'F'})}).catch(()=>{});
+          // #endregion
           setUserFarms([]);
         }
         
-        // Validar se o farmId selecionado pertence a este usuário
         const currentSelectedFarmId = useAppStore.getState().selectedFarmId;
         if (currentSelectedFarmId) {
           const farmBelongsToUser = farms.some(f => f.id === currentSelectedFarmId);
@@ -222,15 +260,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
         }
       } else {
-        // Se não conseguiu carregar perfil, pode ser sessão inválida
         console.warn("Could not load user profile - session may be invalid");
         setUser(null);
         setStoreUser(null);
       }
     } catch (error: any) {
       console.error("Error loading user data:", error);
+      // #region agent log
+      fetch('http://127.0.0.1:7243/ingest/67851273-1af3-4d79-b55e-b02d35463fd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-context.tsx:loadUserData',message:'Error in loadUserData',data:{error:error?.message},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'F'})}).catch(()=>{});
+      // #endregion
       
-      // Se for erro de API key ou sessão, limpar sessão
       if (error?.message?.includes("API key") || error?.status === 406) {
         console.warn("Session appears corrupted - clearing");
         await clearCorruptedSession();
@@ -239,6 +278,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUserFarms([]);
       }
     } finally {
+      // #region agent log
+      fetch('http://127.0.0.1:7243/ingest/67851273-1af3-4d79-b55e-b02d35463fd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-context.tsx:loadUserData',message:'loadUserData finished',data:{},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'E'})}).catch(()=>{});
+      // #endregion
       setLoading(false);
       setInitialized(true);
       isLoadingUserDataRef.current = false;
