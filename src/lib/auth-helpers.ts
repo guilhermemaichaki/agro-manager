@@ -38,9 +38,15 @@ export async function getCurrentUserProfile(): Promise<UserProfile | null> {
   // Se encontrou, retornar
   if (data) return data as UserProfile;
 
-  // Se não encontrou, criar perfil automaticamente
-  if (error?.code === "PGRST116" || !data) {
-    const fullName = user.user_metadata?.full_name || "";
+  // Se não encontrou (PGRST116 = no rows), tentar criar perfil
+  if (error?.code === "PGRST116") {
+    console.log("[Auth] Profile not found, attempting to create...");
+    
+    const fullName = user.user_metadata?.full_name || 
+                     user.user_metadata?.name || 
+                     user.email?.split("@")[0] || 
+                     "Usuário";
+    
     const { data: newProfile, error: insertError } = await supabase
       .from("user_profiles")
       .insert({
@@ -53,10 +59,30 @@ export async function getCurrentUserProfile(): Promise<UserProfile | null> {
 
     if (insertError) {
       console.error("Erro ao criar perfil:", insertError);
+      
+      // Se erro for de permissão (RLS), retornar um perfil temporário
+      // para que o usuário possa pelo menos ver a interface
+      if (insertError.code === "42501" || insertError.message?.includes("policy")) {
+        console.warn("[Auth] RLS blocking profile creation, using temporary profile");
+        return {
+          id: user.id,
+          email: user.email || "",
+          full_name: fullName,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        } as UserProfile;
+      }
+      
       return null;
     }
 
+    console.log("[Auth] Profile created successfully");
     return newProfile as UserProfile;
+  }
+
+  // Outro erro (não PGRST116)
+  if (error) {
+    console.error("[Auth] Error fetching profile:", error);
   }
 
   return null;
