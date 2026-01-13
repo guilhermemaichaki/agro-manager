@@ -9,7 +9,7 @@ import {
   getUserFarms,
   getFarmMember,
 } from "@/lib/auth-helpers";
-import type { UserProfile, Farm, FarmMember } from "@/types/schema";
+import type { UserProfile, Farm } from "@/types/schema";
 
 interface AuthContextType {
   user: UserProfile | null;
@@ -55,7 +55,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSession: setStoreSession,
     setUserFarms,
     setCurrentFarmMember,
+    setSelectedFarmId,
     selectedFarmId,
+    clearAuth,
+    checkAndClearForNewUser,
   } = useAppStore();
 
   useEffect(() => {
@@ -140,9 +143,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Tratar logout
       if (event === "SIGNED_OUT") {
         setUser(null);
-        setStoreUser(null);
-        setUserFarms([]);
-        setCurrentFarmMember(null);
+        clearAuth(); // Limpa todo o store incluindo farmId
         setLoading(false);
         setInitialized(true);
         return;
@@ -189,19 +190,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const userProfile = await getCurrentUserProfile();
       
       if (userProfile) {
+        // Verificar se é um usuário diferente do anterior
+        // Se for, limpa as seleções para evitar ver dados de outro usuário
+        const userChanged = checkAndClearForNewUser(userProfile.id);
+        if (userChanged) {
+          console.log("User changed - cleared previous selections");
+        }
+        
         setUser(userProfile);
         setStoreUser(userProfile);
         
+        let farms: Farm[] = [];
         try {
-          const farms = await getUserFarms();
+          farms = await getUserFarms();
           setUserFarms(farms);
         } catch (farmsError) {
           console.error("Error loading farms:", farmsError);
           setUserFarms([]);
         }
         
-        if (selectedFarmId) {
-          await loadFarmMember(selectedFarmId);
+        // Validar se o farmId selecionado pertence a este usuário
+        const currentSelectedFarmId = useAppStore.getState().selectedFarmId;
+        if (currentSelectedFarmId) {
+          const farmBelongsToUser = farms.some(f => f.id === currentSelectedFarmId);
+          if (!farmBelongsToUser) {
+            console.warn("Selected farm does not belong to user - clearing");
+            setSelectedFarmId(null);
+            setCurrentFarmMember(null);
+          } else {
+            await loadFarmMember(currentSelectedFarmId);
+          }
         }
       } else {
         // Se não conseguiu carregar perfil, pode ser sessão inválida

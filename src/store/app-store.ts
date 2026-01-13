@@ -14,6 +14,9 @@ interface AppState {
   userFarms: Farm[];
   currentFarmMember: FarmMember | null;
   
+  // ID do último usuário logado (para detectar troca de usuário)
+  lastUserId: string | null;
+  
   // Setters
   setSelectedFarmId: (farmId: string | null) => void;
   setSelectedHarvestYearId: (harvestYearId: string | null) => void;
@@ -23,11 +26,14 @@ interface AppState {
   setUserFarms: (farms: Farm[]) => void;
   setCurrentFarmMember: (member: FarmMember | null) => void;
   clearAuth: () => void;
+  
+  // Verificar e limpar se usuário mudou
+  checkAndClearForNewUser: (userId: string) => boolean;
 }
 
 export const useAppStore = create<AppState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       selectedFarmId: null,
       selectedHarvestYearId: null,
       selectedHarvestCycleId: null,
@@ -35,6 +41,7 @@ export const useAppStore = create<AppState>()(
       session: null,
       userFarms: [],
       currentFarmMember: null,
+      lastUserId: null,
       
       setSelectedFarmId: (farmId) => set({ selectedFarmId: farmId }),
       setSelectedHarvestYearId: (harvestYearId) => {
@@ -55,7 +62,28 @@ export const useAppStore = create<AppState>()(
         selectedFarmId: null,
         selectedHarvestYearId: null,
         selectedHarvestCycleId: null,
+        lastUserId: null,
       }),
+      
+      // Verifica se é um usuário diferente e limpa os dados se for
+      checkAndClearForNewUser: (userId: string) => {
+        const { lastUserId } = get();
+        if (lastUserId && lastUserId !== userId) {
+          // Usuário diferente - limpar seleções anteriores
+          set({
+            selectedFarmId: null,
+            selectedHarvestYearId: null,
+            selectedHarvestCycleId: null,
+            userFarms: [],
+            currentFarmMember: null,
+            lastUserId: userId,
+          });
+          return true; // Indica que houve troca de usuário
+        }
+        // Mesmo usuário ou primeiro login
+        set({ lastUserId: userId });
+        return false;
+      },
     }),
     {
       name: "agro-manager-storage",
@@ -63,7 +91,7 @@ export const useAppStore = create<AppState>()(
         selectedFarmId: state.selectedFarmId,
         selectedHarvestYearId: state.selectedHarvestYearId,
         selectedHarvestCycleId: state.selectedHarvestCycleId,
-        // Não persistir dados sensíveis de autenticação
+        lastUserId: state.lastUserId, // Persistir para detectar troca de usuário
       }),
     }
   )
