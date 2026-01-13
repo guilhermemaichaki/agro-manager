@@ -45,6 +45,8 @@ import * as z from "zod";
 import type { Product, CreateProductInput, UpdateProductInput, Category } from "@/types/schema";
 import { supabase } from "@/lib/supabase";
 import { CategorySelector } from "@/components/category-selector";
+import { useAppStore } from "@/store/app-store";
+import { Building2 } from "lucide-react";
 
 // Schema de validação
 const productSchema = z.object({
@@ -93,7 +95,9 @@ async function fetchProductCategories(productId: string): Promise<Category[]> {
 }
 
 // Funções de API usando Supabase
-async function fetchProducts(): Promise<Product[]> {
+async function fetchProducts(farmId: string | null): Promise<Product[]> {
+  if (!farmId) return [];
+  
   const { data, error } = await supabase
     .from("products")
     .select(`
@@ -102,6 +106,7 @@ async function fetchProducts(): Promise<Product[]> {
         category:categories(*)
       )
     `)
+    .eq("farm_id", farmId)
     .order("created_at", { ascending: false });
 
   if (error) {
@@ -115,13 +120,18 @@ async function fetchProducts(): Promise<Product[]> {
   }));
 }
 
-async function createProduct(data: CreateProductInput): Promise<Product> {
+async function createProduct(data: CreateProductInput, farmId: string | null): Promise<Product> {
+  if (!farmId) {
+    throw new Error("Fazenda não selecionada");
+  }
+  
   const { category_ids, ...productData } = data;
 
   const { data: newProduct, error } = await supabase
     .from("products")
     .insert({
       name: productData.name,
+      farm_id: farmId,
       company: productData.company,
       active_principle: productData.active_principle || null,
       unit: productData.unit,
@@ -228,6 +238,7 @@ async function deleteProduct(id: string): Promise<void> {
 }
 
 export default function ProdutosPage() {
+  const { selectedFarmId } = useAppStore();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [sortColumn, setSortColumn] = useState<string | null>(null);
@@ -236,13 +247,14 @@ export default function ProdutosPage() {
 
   // Query para buscar produtos
   const { data: products = [], isLoading, error: fetchError } = useQuery({
-    queryKey: ["products"],
-    queryFn: fetchProducts,
+    queryKey: ["products", selectedFarmId],
+    queryFn: () => fetchProducts(selectedFarmId),
+    enabled: !!selectedFarmId,
   });
 
   // Mutation para criar produto
   const createMutation = useMutation({
-    mutationFn: createProduct,
+    mutationFn: (data: CreateProductInput) => createProduct(data, selectedFarmId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["products"] });
       setIsDialogOpen(false);
@@ -386,6 +398,31 @@ export default function ProdutosPage() {
       return 0;
     });
   }, [products, sortColumn, sortDirection]);
+
+  // Se não há fazenda selecionada, mostrar mensagem
+  if (!selectedFarmId) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Cadastro de produtos</h1>
+          <p className="text-muted-foreground">
+            Gerencie os defensivos agrícolas cadastrados
+          </p>
+        </div>
+        
+        <Card className="border-dashed">
+          <CardContent className="flex flex-col items-center justify-center py-16">
+            <Building2 className="h-16 w-16 text-muted-foreground mb-4" />
+            <h2 className="text-xl font-semibold mb-2">Selecione uma Fazenda</h2>
+            <p className="text-muted-foreground text-center max-w-md">
+              Para visualizar e gerenciar produtos, selecione uma fazenda no menu superior 
+              ou cadastre uma nova fazenda clicando em &quot;+ Cadastrar Fazenda&quot;.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

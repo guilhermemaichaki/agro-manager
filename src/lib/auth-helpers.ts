@@ -28,6 +28,13 @@ export async function getCurrentUserProfile(): Promise<UserProfile | null> {
   const user = await getCurrentUser();
   if (!user) return null;
 
+  // Verificar se há sessão válida antes de fazer requisições
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) {
+    console.warn("[Auth] No valid session found");
+    return null;
+  }
+
   // Tentar buscar perfil existente
   const { data, error } = await supabase
     .from("user_profiles")
@@ -59,6 +66,22 @@ export async function getCurrentUserProfile(): Promise<UserProfile | null> {
 
     if (insertError) {
       console.error("Erro ao criar perfil:", insertError);
+      
+      // Se erro 409 (conflict), o perfil já existe - tentar buscar novamente
+      // 23505 = unique_violation no PostgreSQL
+      if (insertError.code === "23505" || insertError.message?.includes("duplicate") || insertError.message?.includes("409")) {
+        console.log("[Auth] Profile already exists (409), fetching again...");
+        const { data: existingProfile, error: fetchError } = await supabase
+          .from("user_profiles")
+          .select("*")
+          .eq("id", user.id)
+          .single();
+        
+        if (existingProfile && !fetchError) {
+          console.log("[Auth] Successfully fetched existing profile");
+          return existingProfile as UserProfile;
+        }
+      }
       
       // Se erro for de permissão (RLS), retornar um perfil temporário
       // para que o usuário possa pelo menos ver a interface
