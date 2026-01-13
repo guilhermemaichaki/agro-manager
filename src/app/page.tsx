@@ -18,8 +18,10 @@ import {
   MapPin,
   ArrowDownCircle,
   ArrowUpCircle,
+  Building2,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { useAppStore } from "@/store/app-store";
 import type { Application, StockMovement, Field, Product } from "@/types/schema";
 
 // Interface para dados do dashboard
@@ -33,7 +35,12 @@ interface DashboardData {
 }
 
 // Função para buscar todos os dados do dashboard em paralelo
-async function getDashboardData(): Promise<DashboardData> {
+async function getDashboardData(farmId: string | null): Promise<DashboardData | null> {
+  // Se não há fazenda selecionada, retornar null
+  if (!farmId) {
+    return null;
+  }
+  
   const [
     productsResult,
     plannedAppsResult,
@@ -42,21 +49,23 @@ async function getDashboardData(): Promise<DashboardData> {
     upcomingAppsResult,
     movementsResult,
   ] = await Promise.all([
-    // Total de produtos
-    supabase.from("products").select("id", { count: "exact", head: true }),
-    // Aplicações planejadas
+    // Total de produtos (filtrado por farm_id)
+    supabase.from("products").select("id", { count: "exact", head: true }).eq("farm_id", farmId),
+    // Aplicações planejadas (filtrado por farm_id)
     supabase
       .from("applications")
       .select("id", { count: "exact", head: true })
+      .eq("farm_id", farmId)
       .in("status", ["PLANNED", "planned"]),
-    // Aplicações realizadas
+    // Aplicações realizadas (filtrado por farm_id)
     supabase
       .from("applications")
       .select("id", { count: "exact", head: true })
+      .eq("farm_id", farmId)
       .in("status", ["DONE", "completed", "done"]),
-    // Talhões ativos
-    supabase.from("fields").select("id", { count: "exact", head: true }),
-    // Próximas 5 aplicações planejadas
+    // Talhões ativos (filtrado por farm_id)
+    supabase.from("fields").select("id", { count: "exact", head: true }).eq("farm_id", farmId),
+    // Próximas 5 aplicações planejadas (filtrado por farm_id)
     supabase
       .from("applications")
       .select(`
@@ -64,16 +73,18 @@ async function getDashboardData(): Promise<DashboardData> {
         field:fields(*),
         harvest_year:harvest_years(*)
       `)
+      .eq("farm_id", farmId)
       .in("status", ["PLANNED", "planned"])
       .order("application_date", { ascending: true })
       .limit(5),
-    // Últimas 5 movimentações de estoque
+    // Últimas 5 movimentações de estoque (filtrado por farm_id)
     supabase
       .from("stock_movements")
       .select(`
         *,
         product:products(*)
       `)
+      .eq("farm_id", farmId)
       .order("movement_date", { ascending: false })
       .limit(5),
   ]);
@@ -117,10 +128,36 @@ function formatMovementType(type: string): { label: string; variant: "default" |
 }
 
 export default function DashboardPage() {
+  const { selectedFarmId } = useAppStore();
+  
   const { data: dashboardData, isLoading, error } = useQuery({
-    queryKey: ["dashboard"],
-    queryFn: getDashboardData,
+    queryKey: ["dashboard", selectedFarmId],
+    queryFn: () => getDashboardData(selectedFarmId),
+    enabled: !!selectedFarmId, // Só executa se houver fazenda selecionada
   });
+
+  // Se não há fazenda selecionada, mostrar mensagem
+  if (!selectedFarmId) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Visão Geral da Fazenda</h1>
+          <p className="text-muted-foreground capitalize">{getTodayDate()}</p>
+        </div>
+        
+        <Card className="border-dashed">
+          <CardContent className="flex flex-col items-center justify-center py-16">
+            <Building2 className="h-16 w-16 text-muted-foreground mb-4" />
+            <h2 className="text-xl font-semibold mb-2">Selecione uma Fazenda</h2>
+            <p className="text-muted-foreground text-center max-w-md">
+              Para visualizar os dados do dashboard, selecione uma fazenda no menu superior 
+              ou cadastre uma nova fazenda clicando em &quot;+ Cadastrar Fazenda&quot;.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   if (isLoading) {
     return (
@@ -134,7 +171,7 @@ export default function DashboardPage() {
   }
 
   if (error) {
-  return (
+    return (
       <div className="space-y-6">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Visão Geral da Fazenda</h1>
