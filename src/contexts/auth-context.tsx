@@ -134,7 +134,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setStoreSession(session);
         
         // Ignorar eventos que não precisam de ação
-        if (event === "TOKEN_REFRESHED") {
+        if (event === "TOKEN_REFRESHED" || event === "INITIAL_SESSION") {
           return;
         }
         
@@ -147,20 +147,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return;
         }
         
+        // Apenas processar SIGNED_IN (não INITIAL_SESSION)
         if (event === "SIGNED_IN" && session?.user) {
           console.log("[Auth] User signed in, loading data");
           setLoading(true);
           
-          const result = await loadUserData(session.user.id);
-          
-          if (isMounted && result) {
-            setUser(result.userProfile);
-            setStoreUser(result.userProfile);
-            setUserFarms(result.farms);
+          try {
+            const result = await loadUserData(session.user.id);
+            
+            if (isMounted && result) {
+              setUser(result.userProfile);
+              setStoreUser(result.userProfile);
+              setUserFarms(result.farms);
+            } else if (isMounted) {
+              // Se não conseguiu carregar dados, ainda finaliza o loading
+              console.warn("[Auth] Failed to load user data, but finishing initialization");
+            }
+          } catch (error) {
+            console.error("[Auth] Error in SIGNED_IN handler:", error);
+          } finally {
+            if (isMounted) {
+              setLoading(false);
+              setInitialized(true);
+            }
           }
-          
-          setLoading(false);
-          setInitialized(true);
         }
       }
     );
