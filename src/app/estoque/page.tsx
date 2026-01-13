@@ -2,7 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2, ArrowDown } from "lucide-react";
+import { Plus, Pencil, Trash2, ArrowDown, Building2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -45,6 +45,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import type { StockMovement, Product, StockMovementType } from "@/types/schema";
 import { supabase } from "@/lib/supabase";
+import { useAppStore } from "@/store/app-store";
 
 // Schema de validação para entrada de estoque
 const stockEntrySchema = z.object({
@@ -81,11 +82,14 @@ interface StockBalance {
   categories: string[]; // Array de nomes de categorias
 }
 
-// Função para buscar produtos
-async function fetchProducts(): Promise<Product[]> {
+// Função para buscar produtos (filtrado por fazenda)
+async function fetchProducts(farmId: string | null): Promise<Product[]> {
+  if (!farmId) return [];
+  
   const { data, error } = await supabase
     .from("products")
     .select("*")
+    .eq("farm_id", farmId)
     .order("name", { ascending: true });
 
   if (error) {
@@ -95,14 +99,17 @@ async function fetchProducts(): Promise<Product[]> {
   return data || [];
 }
 
-// Função para buscar movimentações de estoque
-async function fetchStockMovements(): Promise<StockMovement[]> {
+// Função para buscar movimentações de estoque (filtrado por fazenda)
+async function fetchStockMovements(farmId: string | null): Promise<StockMovement[]> {
+  if (!farmId) return [];
+  
   const { data, error } = await supabase
     .from("stock_movements")
     .select(`
       *,
       product:products(*)
     `)
+    .eq("farm_id", farmId)
     .order("movement_date", { ascending: false });
 
   if (error) {
@@ -112,8 +119,10 @@ async function fetchStockMovements(): Promise<StockMovement[]> {
   return data || [];
 }
 
-// Função para buscar aplicações planejadas
-async function fetchPlannedApplications(): Promise<Map<string, number>> {
+// Função para buscar aplicações planejadas (filtrado por fazenda)
+async function fetchPlannedApplications(farmId: string | null): Promise<Map<string, number>> {
+  if (!farmId) return new Map();
+  
   const { data: applications, error } = await supabase
     .from("applications")
     .select(`
@@ -123,6 +132,7 @@ async function fetchPlannedApplications(): Promise<Map<string, number>> {
         quantity_used
       )
     `)
+    .eq("farm_id", farmId)
     .in("status", ["PLANNED", "planned"]);
 
   if (error || !applications) {
@@ -145,12 +155,13 @@ async function fetchPlannedApplications(): Promise<Map<string, number>> {
   return plannedMap;
 }
 
-// Função para calcular saldo de estoque
-async function fetchStockBalance(): Promise<StockBalance[]> {
+// Função para calcular saldo de estoque (filtrado por fazenda)
+async function fetchStockBalance(farmId: string | null): Promise<StockBalance[]> {
+  if (!farmId) return [];
   const [movements, products, plannedMap] = await Promise.all([
-    fetchStockMovements(),
-    fetchProducts(),
-    fetchPlannedApplications(),
+    fetchStockMovements(farmId),
+    fetchProducts(farmId),
+    fetchPlannedApplications(farmId),
   ]);
 
   // Cria um mapa de produtos para facilitar busca
@@ -260,8 +271,10 @@ async function fetchStockBalance(): Promise<StockBalance[]> {
   return balances.sort((a, b) => a.product_name.localeCompare(b.product_name));
 }
 
-// Função para buscar apenas entradas (para a aba 2)
-async function fetchStockEntries(): Promise<(StockMovement & { product_categories?: Array<{ category: { name: string } }> })[]> {
+// Função para buscar apenas entradas (para a aba 2, filtrado por fazenda)
+async function fetchStockEntries(farmId: string | null): Promise<(StockMovement & { product_categories?: Array<{ category: { name: string } }> })[]> {
+  if (!farmId) return [];
+  
   const { data, error } = await supabase
     .from("stock_movements")
     .select(`
@@ -273,6 +286,7 @@ async function fetchStockEntries(): Promise<(StockMovement & { product_categorie
         )
       )
     `)
+    .eq("farm_id", farmId)
     .in("movement_type", ["entry", "IN"])
     .order("movement_date", { ascending: false });
 
@@ -284,11 +298,16 @@ async function fetchStockEntries(): Promise<(StockMovement & { product_categorie
 }
 
 // Função para criar entrada de estoque
-async function createStockEntry(data: CreateStockEntryInput): Promise<StockMovement> {
+async function createStockEntry(data: CreateStockEntryInput, farmId: string | null): Promise<StockMovement> {
+  if (!farmId) {
+    throw new Error("Fazenda não selecionada");
+  }
+  
   const { data: newEntry, error } = await supabase
     .from("stock_movements")
     .insert({
       product_id: data.product_id,
+      farm_id: farmId,
       movement_type: "entry" as StockMovementType,
       quantity: data.quantity,
       unit_price: data.unit_price,
@@ -366,6 +385,7 @@ function formatCurrency(value: number): string {
 }
 
 export default function EstoquePage() {
+  const { selectedFarmId } = useAppStore();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<StockMovement | null>(null);
   const [sortColumn, setSortColumn] = useState<string | null>(null);
@@ -374,25 +394,28 @@ export default function EstoquePage() {
 
   // Query para buscar saldo de estoque (Aba 1)
   const { data: stockBalance = [], isLoading: isLoadingBalance } = useQuery({
-    queryKey: ["stock_balance"],
-    queryFn: fetchStockBalance,
+    queryKey: ["stock_balance", selectedFarmId],
+    queryFn: () => fetchStockBalance(selectedFarmId),
+    enabled: !!selectedFarmId,
   });
 
   // Query para buscar produtos (para o select)
   const { data: products = [] } = useQuery({
-    queryKey: ["products"],
-    queryFn: fetchProducts,
+    queryKey: ["products", selectedFarmId],
+    queryFn: () => fetchProducts(selectedFarmId),
+    enabled: !!selectedFarmId,
   });
 
   // Query para buscar entradas (Aba 2)
   const { data: stockEntries = [], isLoading: isLoadingEntries, error: fetchError } = useQuery({
-    queryKey: ["stock_entries"],
-    queryFn: fetchStockEntries,
+    queryKey: ["stock_entries", selectedFarmId],
+    queryFn: () => fetchStockEntries(selectedFarmId),
+    enabled: !!selectedFarmId,
   });
 
   // Mutation para criar entrada
   const createMutation = useMutation({
-    mutationFn: createStockEntry,
+    mutationFn: (data: CreateStockEntryInput) => createStockEntry(data, selectedFarmId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["stock_entries"] });
       queryClient.invalidateQueries({ queryKey: ["stock_balance"] });
@@ -544,6 +567,31 @@ export default function EstoquePage() {
       return sortDirection === "asc" ? comparison : -comparison;
     });
   }, [stockBalance, sortColumn, sortDirection]);
+
+  // Se não há fazenda selecionada, mostrar mensagem
+  if (!selectedFarmId) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Gestão de Estoque</h1>
+          <p className="text-muted-foreground">
+            Controle de entradas e saldo atual de produtos
+          </p>
+        </div>
+        
+        <Card className="border-dashed">
+          <CardContent className="flex flex-col items-center justify-center py-16">
+            <Building2 className="h-16 w-16 text-muted-foreground mb-4" />
+            <h2 className="text-xl font-semibold mb-2">Selecione uma Fazenda</h2>
+            <p className="text-muted-foreground text-center max-w-md">
+              Para visualizar e gerenciar o estoque, selecione uma fazenda no menu superior 
+              ou cadastre uma nova fazenda clicando em &quot;+ Cadastrar Fazenda&quot;.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
