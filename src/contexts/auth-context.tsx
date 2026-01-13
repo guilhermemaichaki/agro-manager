@@ -27,7 +27,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [initialized, setInitialized] = useState(false);
   const initRef = useRef(false);
-  const userRef = useRef<UserProfile | null>(null);
   
   const {
     setUser: setStoreUser,
@@ -77,49 +76,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  // Função para verificar e atualizar sessão
-  async function refreshSessionIfNeeded() {
-    try {
-      const { data: { session }, error } = await supabase.auth.getSession();
-      
-      if (error) {
-        console.error("[Auth] Error getting session:", error);
-        return false;
-      }
-      
-      // Se não há sessão, não há o que fazer
-      if (!session) {
-        return false;
-      }
-      
-      // Verificar se a sessão está próxima de expirar (menos de 5 minutos)
-      const expiresAt = session.expires_at;
-      if (expiresAt) {
-        const expiresIn = expiresAt - Math.floor(Date.now() / 1000);
-        if (expiresIn < 300) { // Menos de 5 minutos
-          console.log("[Auth] Session expiring soon, refreshing...");
-          const { data: { session: refreshedSession }, error: refreshError } = await supabase.auth.refreshSession();
-          
-          if (refreshError) {
-            console.error("[Auth] Error refreshing session:", refreshError);
-            return false;
-          }
-          
-          if (refreshedSession) {
-            setStoreSession(refreshedSession);
-            return true;
-          }
-        }
-      }
-      
-      setStoreSession(session);
-      return true;
-    } catch (error) {
-      console.error("[Auth] Error in refreshSessionIfNeeded:", error);
-      return false;
-    }
-  }
-
   useEffect(() => {
     // Evitar inicialização dupla
     if (initRef.current) return;
@@ -130,20 +86,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     async function init() {
       try {
-        // Verificar e atualizar sessão se necessário
-        const hasValidSession = await refreshSessionIfNeeded();
-        
-        if (!isMounted) return;
-        
         const { data: { session } } = await supabase.auth.getSession();
         
         if (session?.user) {
           console.log("[Auth] Session found, loading user data");
+          setStoreSession(session);
           const result = await loadUserData(session.user.id);
           
           if (isMounted && result) {
             setUser(result.userProfile);
-            userRef.current = result.userProfile;
             setStoreUser(result.userProfile);
             setUserFarms(result.farms);
           }
@@ -179,14 +130,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (event === "SIGNED_OUT") {
           console.log("[Auth] User signed out, clearing state");
           setUser(null);
-          userRef.current = null;
           clearAuth();
           setLoading(false);
           setInitialized(true);
           return;
         }
         
-        // Apenas processar SIGNED_IN (não INITIAL_SESSION)
+        // Apenas processar SIGNED_IN
         if (event === "SIGNED_IN" && session?.user) {
           console.log("[Auth] User signed in, loading data");
           setLoading(true);
@@ -196,11 +146,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             
             if (isMounted && result) {
               setUser(result.userProfile);
-              userRef.current = result.userProfile;
               setStoreUser(result.userProfile);
               setUserFarms(result.farms);
             } else if (isMounted) {
-              // Se não conseguiu carregar dados, ainda finaliza o loading
               console.warn("[Auth] Failed to load user data, but finishing initialization");
             }
           } catch (error) {
@@ -215,62 +163,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     );
 
-    // Listener para quando a página volta ao foco (resolve problema de reload infinito)
-    const handleVisibilityChange = async () => {
-      if (!isMounted) return;
-      
-      // Quando a página volta a ficar visível
-      if (document.visibilityState === "visible") {
-        console.log("[Auth] Page became visible, checking session...");
-        
-        // Verificar se há sessão e se está válida
-        const hasValidSession = await refreshSessionIfNeeded();
-        
-        if (hasValidSession) {
-          const { data: { session } } = await supabase.auth.getSession();
-          
-          // Se há sessão mas não há usuário carregado, recarregar
-          if (session?.user && !userRef.current) {
-            console.log("[Auth] Session exists but no user loaded, reloading...");
-            setLoading(true);
-            
-            try {
-              const result = await loadUserData(session.user.id);
-              if (isMounted && result) {
-                setUser(result.userProfile);
-                userRef.current = result.userProfile;
-                setStoreUser(result.userProfile);
-                setUserFarms(result.farms);
-              }
-            } catch (error) {
-              console.error("[Auth] Error reloading user data:", error);
-            } finally {
-              if (isMounted) {
-                setLoading(false);
-                setInitialized(true);
-              }
-            }
-          }
-        } else {
-          // Se não há sessão válida e há usuário, limpar estado
-          if (userRef.current) {
-            console.log("[Auth] No valid session but user exists, clearing...");
-            setUser(null);
-            userRef.current = null;
-            clearAuth();
-            setLoading(false);
-            setInitialized(true);
-          }
-        }
-      }
-    };
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-
     return () => {
       isMounted = false;
       subscription.unsubscribe();
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, []);
 

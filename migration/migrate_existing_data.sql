@@ -14,7 +14,7 @@
 -- Substitua pelo email do usuário proprietário
 DO $$
 DECLARE
-  v_owner_email TEXT := 'SEU_EMAIL@exemplo.com'; -- ALTERE AQUI
+  v_owner_email TEXT := 'guilhermemaichaki@gmail.com'; -- ALTERE AQUI
   v_owner_id UUID;
   v_farm_id UUID;
 BEGIN
