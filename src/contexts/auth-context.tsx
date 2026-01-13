@@ -23,11 +23,32 @@ const AuthContext = createContext<AuthContextType>({
   initialized: false,
 });
 
+// Função para limpar sessão corrompida
+async function clearCorruptedSession() {
+  try {
+    await supabase.auth.signOut();
+  } catch {
+    // Ignorar erros ao limpar sessão
+  }
+  // Limpar localStorage manualmente
+  if (typeof window !== "undefined") {
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && (key.includes("supabase") || key.includes("sb-"))) {
+        keysToRemove.push(key);
+      }
+    }
+    keysToRemove.forEach((key) => localStorage.removeItem(key));
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [initialized, setInitialized] = useState(false);
   const hasHandledInitialSessionRef = useRef(false);
+  const isLoadingUserDataRef = useRef(false);
   const router = useRouter();
   const {
     setUser: setStoreUser,
@@ -38,39 +59,72 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   } = useAppStore();
 
   useEffect(() => {
-    // Timeout de segurança: se após 5 segundos não inicializou, forçar inicialização
-    const timeoutId = setTimeout(() => {
-      if (!hasHandledInitialSessionRef.current) {
+    let isMounted = true;
+    
+    // Timeout de segurança: se após 8 segundos não inicializou, forçar inicialização
+    const timeoutId = setTimeout(async () => {
+      if (!hasHandledInitialSessionRef.current && isMounted) {
         console.warn("Auth initialization timeout - forcing initialization");
+        // Se timeout, pode ser sessão corrompida - limpar e continuar
+        await clearCorruptedSession();
+        setStoreSession(null);
+        setUser(null);
+        setStoreUser(null);
         setLoading(false);
         setInitialized(true);
         hasHandledInitialSessionRef.current = true;
       }
-    }, 5000);
+    }, 8000);
 
     // Verificar sessão inicial
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      clearTimeout(timeoutId);
-      setStoreSession(session);
-      if (session?.user) {
-        loadUserData();
-      } else {
+    const initializeAuth = async () => {
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
+        
+        if (!isMounted) return;
+        clearTimeout(timeoutId);
+        
+        if (error) {
+          console.error("Error getting session:", error);
+          // Sessão pode estar corrompida - limpar
+          await clearCorruptedSession();
+          setStoreSession(null);
+          setLoading(false);
+          setInitialized(true);
+          hasHandledInitialSessionRef.current = true;
+          return;
+        }
+        
+        setStoreSession(session);
+        
+        if (session?.user) {
+          await loadUserData();
+        } else {
+          setLoading(false);
+          setInitialized(true);
+        }
+        hasHandledInitialSessionRef.current = true;
+      } catch (error) {
+        if (!isMounted) return;
+        clearTimeout(timeoutId);
+        console.error("Error initializing auth:", error);
+        // Limpar sessão corrompida
+        await clearCorruptedSession();
+        setStoreSession(null);
         setLoading(false);
         setInitialized(true);
+        hasHandledInitialSessionRef.current = true;
       }
-      hasHandledInitialSessionRef.current = true;
-    }).catch((error) => {
-      clearTimeout(timeoutId);
-      console.error("Error getting session:", error);
-      setLoading(false);
-      setInitialized(true);
-      hasHandledInitialSessionRef.current = true;
-    });
+    };
+
+    initializeAuth();
 
     // Listener para mudanças de autenticação
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!isMounted) return;
+      
       setStoreSession(session);
       
       // Ignorar INITIAL_SESSION após já ter sido processado na inicialização
@@ -79,15 +133,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       
       // Não recarregar dados do usuário em eventos de token refresh
-      // Apenas atualizar a sessão
       if (event === "TOKEN_REFRESHED") {
+        return;
+      }
+      
+      // Tratar logout
+      if (event === "SIGNED_OUT") {
+        setUser(null);
+        setStoreUser(null);
+        setUserFarms([]);
+        setCurrentFarmMember(null);
+        setLoading(false);
+        setInitialized(true);
         return;
       }
       
       if (session?.user) {
         await loadUserData();
       } else {
-        // Só limpar usuário se não for INITIAL_SESSION (que já foi processado no getSession)
         if (event !== "INITIAL_SESSION") {
           setUser(null);
           setStoreUser(null);
@@ -99,8 +162,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     });
 
-    // Cleanup: cancelar timeout e unsubscribe do listener
+    // Cleanup
     return () => {
+      isMounted = false;
       clearTimeout(timeoutId);
       subscription.unsubscribe();
     };
@@ -116,25 +180,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [selectedFarmId, user]);
 
   async function loadUserData() {
+    // Evitar chamadas duplicadas
+    if (isLoadingUserDataRef.current) return;
+    isLoadingUserDataRef.current = true;
+    
     try {
       setLoading(true);
       const userProfile = await getCurrentUserProfile();
+      
       if (userProfile) {
         setUser(userProfile);
         setStoreUser(userProfile);
         
-        const farms = await getUserFarms();
-        setUserFarms(farms);
+        try {
+          const farms = await getUserFarms();
+          setUserFarms(farms);
+        } catch (farmsError) {
+          console.error("Error loading farms:", farmsError);
+          setUserFarms([]);
+        }
         
         if (selectedFarmId) {
           await loadFarmMember(selectedFarmId);
         }
+      } else {
+        // Se não conseguiu carregar perfil, pode ser sessão inválida
+        console.warn("Could not load user profile - session may be invalid");
+        setUser(null);
+        setStoreUser(null);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error loading user data:", error);
+      
+      // Se for erro de API key ou sessão, limpar sessão
+      if (error?.message?.includes("API key") || error?.status === 406) {
+        console.warn("Session appears corrupted - clearing");
+        await clearCorruptedSession();
+        setUser(null);
+        setStoreUser(null);
+        setUserFarms([]);
+      }
     } finally {
       setLoading(false);
       setInitialized(true);
+      isLoadingUserDataRef.current = false;
     }
   }
 
