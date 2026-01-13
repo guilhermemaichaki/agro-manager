@@ -58,9 +58,17 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     return <>{children}</>;
   }
 
-  // Se não está autenticado, não mostrar conteúdo (redirecionamento já foi feito)
+  // Se não está autenticado, mostrar loading enquanto redireciona
+  // (o redirecionamento já foi iniciado no useEffect acima)
   if (!user) {
-    return null;
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="text-center">
+          <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-primary border-r-transparent"></div>
+          <p className="mt-4 text-sm text-muted-foreground">Redirecionando...</p>
+        </div>
+      </div>
+    );
   }
 
   // Usuário autenticado e não é rota pública

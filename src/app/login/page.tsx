@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -18,7 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, CheckCircle2 } from "lucide-react";
 
 const loginSchema = z.object({
   email: z.string().email("Email inválido"),
@@ -27,10 +27,25 @@ const loginSchema = z.object({
 
 type LoginFormValues = z.infer<typeof loginSchema>;
 
-export default function LoginPage() {
+function LoginForm() {
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // Verificar mensagens na URL
+  useEffect(() => {
+    const message = searchParams.get("message");
+    const errorParam = searchParams.get("error");
+    
+    if (message) {
+      setSuccessMessage(decodeURIComponent(message));
+    }
+    if (errorParam) {
+      setError(decodeURIComponent(errorParam));
+    }
+  }, [searchParams]);
 
   const form = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
@@ -44,11 +59,19 @@ export default function LoginPage() {
     try {
       setLoading(true);
       setError(null);
+      setSuccessMessage(null);
       
       const { error: signInError } = await signIn(data.email, data.password);
       
       if (signInError) {
-        setError(signInError.message || "Erro ao fazer login. Verifique suas credenciais.");
+        // Traduzir mensagens de erro comuns
+        let errorMessage = signInError.message || "Erro ao fazer login. Verifique suas credenciais.";
+        if (errorMessage.includes("Email not confirmed")) {
+          errorMessage = "Email não confirmado. Verifique sua caixa de entrada e clique no link de confirmação.";
+        } else if (errorMessage.includes("Invalid login credentials")) {
+          errorMessage = "Email ou senha incorretos.";
+        }
+        setError(errorMessage);
         return;
       }
       
@@ -73,6 +96,12 @@ export default function LoginPage() {
         <CardContent>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+              {successMessage && (
+                <div className="rounded-md bg-green-50 p-3 text-sm text-green-800 flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4" />
+                  <span>{successMessage}</span>
+                </div>
+              )}
               {error && (
                 <div className="rounded-md bg-red-50 p-3 text-sm text-red-800 flex items-center gap-2">
                   <AlertCircle className="h-4 w-4" />
@@ -149,5 +178,20 @@ export default function LoginPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="text-center">
+          <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-primary border-r-transparent"></div>
+          <p className="mt-4 text-sm text-muted-foreground">Carregando...</p>
+        </div>
+      </div>
+    }>
+      <LoginForm />
+    </Suspense>
   );
 }

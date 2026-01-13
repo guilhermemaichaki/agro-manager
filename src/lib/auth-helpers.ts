@@ -22,20 +22,44 @@ export async function getCurrentUser() {
 }
 
 /**
- * Obtém o perfil do usuário atual
+ * Obtém o perfil do usuário atual (cria se não existir)
  */
 export async function getCurrentUserProfile(): Promise<UserProfile | null> {
   const user = await getCurrentUser();
   if (!user) return null;
 
+  // Tentar buscar perfil existente
   const { data, error } = await supabase
     .from("user_profiles")
     .select("*")
     .eq("id", user.id)
     .single();
 
-  if (error || !data) return null;
-  return data as UserProfile;
+  // Se encontrou, retornar
+  if (data) return data as UserProfile;
+
+  // Se não encontrou, criar perfil automaticamente
+  if (error?.code === "PGRST116" || !data) {
+    const fullName = user.user_metadata?.full_name || "";
+    const { data: newProfile, error: insertError } = await supabase
+      .from("user_profiles")
+      .insert({
+        id: user.id,
+        email: user.email || "",
+        full_name: fullName,
+      })
+      .select()
+      .single();
+
+    if (insertError) {
+      console.error("Erro ao criar perfil:", insertError);
+      return null;
+    }
+
+    return newProfile as UserProfile;
+  }
+
+  return null;
 }
 
 /**

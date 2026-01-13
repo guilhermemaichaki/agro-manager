@@ -88,8 +88,8 @@ export function Header() {
 
   const handleLogout = async () => {
     await signOut();
-    router.push("/login");
-    router.refresh();
+    // O onAuthStateChange no AuthProvider vai limpar o estado
+    // e o AuthGuard vai redirecionar para /login automaticamente
   };
 
   return (
