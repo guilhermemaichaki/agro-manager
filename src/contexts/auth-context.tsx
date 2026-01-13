@@ -67,10 +67,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       hasHandledInitialSessionRef.current = true;
     });
 
-    return () => {
-      clearTimeout(timeoutId);
-    };
-
     // Listener para mudanças de autenticação
     const {
       data: { subscription },
@@ -103,7 +99,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     });
 
+    // Cleanup: cancelar timeout e unsubscribe do listener
     return () => {
+      clearTimeout(timeoutId);
       subscription.unsubscribe();
     };
   }, []);
@@ -118,15 +116,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [selectedFarmId, user]);
 
   async function loadUserData() {
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/67851273-1af3-4d79-b55e-b02d35463fd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-context.tsx:87',message:'loadUserData started',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
-    // #endregion
     try {
       setLoading(true);
       const userProfile = await getCurrentUserProfile();
-      // #region agent log
-      fetch('http://127.0.0.1:7243/ingest/67851273-1af3-4d79-b55e-b02d35463fd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-context.tsx:91',message:'loadUserData - userProfile loaded',data:{hasProfile:!!userProfile},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
-      // #endregion
       if (userProfile) {
         setUser(userProfile);
         setStoreUser(userProfile);
@@ -139,14 +131,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
     } catch (error) {
-      // #region agent log
-      fetch('http://127.0.0.1:7243/ingest/67851273-1af3-4d79-b55e-b02d35463fd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-context.tsx:103',message:'loadUserData error',data:{errorMessage:error instanceof Error ? error.message : String(error)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
-      // #endregion
       console.error("Error loading user data:", error);
     } finally {
-      // #region agent log
-      fetch('http://127.0.0.1:7243/ingest/67851273-1af3-4d79-b55e-b02d35463fd9',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth-context.tsx:107',message:'loadUserData finally - setting loading false',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
-      // #endregion
       setLoading(false);
       setInitialized(true);
     }
